@@ -24,7 +24,7 @@ members = [
     "ballista/rust/scheduler",
     "examples",
 ]
-exclude = ["ballista-cli", "python"]
+exclude = ["ballista-cli", "python", "dependencies/arrow-datafusion"]
 
 # cargo build --profile release-lto
 [profile.release-lto]
