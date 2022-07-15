@@ -21,8 +21,6 @@ use log::info;
 use parking_lot::Mutex;
 use sqlparser::ast::Statement;
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use ballista_core::config::BallistaConfig;
@@ -213,12 +211,8 @@ impl BallistaContext {
         path: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        // convert to absolute path because the executor likely has a different working directory
-        let path = PathBuf::from(path);
-        let path = fs::canonicalize(&path)?;
-
         let ctx = self.context.clone();
-        let df = ctx.read_avro(path.to_str().unwrap(), options).await?;
+        let df = ctx.read_avro(path, options).await?;
         Ok(df)
     }
 
@@ -229,12 +223,8 @@ impl BallistaContext {
         path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        // convert to absolute path because the executor likely has a different working directory
-        let path = PathBuf::from(path);
-        let path = fs::canonicalize(&path)?;
-
         let ctx = self.context.clone();
-        let df = ctx.read_parquet(path.to_str().unwrap(), options).await?;
+        let df = ctx.read_parquet(path, options).await?;
         Ok(df)
     }
 
@@ -245,12 +235,8 @@ impl BallistaContext {
         path: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        // convert to absolute path because the executor likely has a different working directory
-        let path = PathBuf::from(path);
-        let path = fs::canonicalize(&path)?;
-
         let ctx = self.context.clone();
-        let df = ctx.read_csv(path.to_str().unwrap(), options).await?;
+        let df = ctx.read_csv(path, options).await?;
         Ok(df)
     }
 
