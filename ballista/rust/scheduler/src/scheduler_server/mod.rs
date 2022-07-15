@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use datafusion::execution::context::{default_session_builder, SessionState};
+use datafusion::execution::context::SessionState;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use tokio::sync::RwLock;
@@ -31,6 +31,7 @@ use ballista_core::event_loop::EventLoop;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::protobuf::TaskStatus;
 use ballista_core::serde::{AsExecutionPlan, BallistaCodec};
+use ballista_core::utils::default_session_builder;
 
 use crate::scheduler_server::event::{QueryStageSchedulerEvent, SchedulerServerEvent};
 use crate::scheduler_server::event_loop::SchedulerServerEventAction;
@@ -289,7 +290,6 @@ mod test {
     use std::time::{Duration, Instant};
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::execution::context::default_session_builder;
     use datafusion::logical_plan::{col, sum, LogicalPlan};
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion::test_util::scan_empty;
@@ -303,6 +303,7 @@ mod test {
     };
     use ballista_core::serde::scheduler::ExecutorData;
     use ballista_core::serde::BallistaCodec;
+    use ballista_core::utils::default_session_builder;
 
     use crate::scheduler_server::event::QueryStageSchedulerEvent;
     use crate::scheduler_server::SchedulerServer;

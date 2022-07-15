@@ -566,7 +566,6 @@ fn generate_job_id() -> String {
 mod test {
     use std::sync::Arc;
 
-    use datafusion::execution::context::default_session_builder;
     use datafusion_proto::protobuf::LogicalPlanNode;
     use tonic::Request;
 
@@ -577,6 +576,7 @@ mod test {
     };
     use ballista_core::serde::scheduler::ExecutorSpecification;
     use ballista_core::serde::BallistaCodec;
+    use ballista_core::utils::default_session_builder;
 
     use crate::state::{backend::standalone::StandaloneClient, SchedulerState};
 

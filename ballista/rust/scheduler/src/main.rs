@@ -44,6 +44,7 @@ use ballista_scheduler::state::backend::{StateBackend, StateBackendClient};
 
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::BallistaCodec;
+use ballista_core::utils::default_session_builder;
 use log::info;
 
 #[macro_use]
@@ -60,7 +61,6 @@ mod config {
 }
 
 use config::prelude::*;
-use datafusion::execution::context::default_session_builder;
 
 async fn start_server(
     config_backend: Arc<dyn StateBackendClient>,

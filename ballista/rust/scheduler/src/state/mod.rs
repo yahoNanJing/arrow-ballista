@@ -182,7 +182,7 @@ mod test {
     };
     use ballista_core::serde::scheduler::{ExecutorMetadata, ExecutorSpecification};
     use ballista_core::serde::BallistaCodec;
-    use datafusion::execution::context::default_session_builder;
+    use ballista_core::utils::default_session_builder;
     use datafusion_proto::protobuf::LogicalPlanNode;
 
     use super::{backend::standalone::StandaloneClient, SchedulerState};
