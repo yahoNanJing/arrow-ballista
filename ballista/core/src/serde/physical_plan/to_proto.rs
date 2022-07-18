@@ -142,6 +142,24 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             .is_some()
         {
             Ok(AggregateFunction::ApproxMedian.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::kylin::kylin_bitmap_distinct::KylinBitMapDistinct>()
+            .is_some()
+        {
+            Ok(AggregateFunction::KylinBitmapCountDistinct.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::kylin::kylin_approx_percentile::KylinApproxPercentile>()
+            .is_some()
+        {
+            Ok(AggregateFunction::KylinApproxPercentile.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::kylin::kylin_approx_distinct::KylinApproxDistinct>()
+            .is_some()
+        {
+            Ok(AggregateFunction::KylinApproxCountDistinct.into())
         } else {
             Err(BallistaError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",
