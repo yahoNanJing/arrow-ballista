@@ -20,7 +20,6 @@
 use log::info;
 use parking_lot::Mutex;
 use sqlparser::ast::Statement;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ballista_core::config::BallistaConfig;
@@ -29,13 +28,9 @@ use ballista_core::serde::protobuf::{ExecuteQueryParams, KeyValuePair};
 use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
 use datafusion_proto::protobuf::LogicalPlanNode;
 
-use datafusion::catalog::TableReference;
 use datafusion::dataframe::DataFrame;
-use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_plan::{
-    source_as_provider, CreateExternalTable, FileType, LogicalPlan, TableScan,
-};
+use datafusion::logical_plan::{CreateExternalTable, FileType, LogicalPlan};
 use datafusion::prelude::{
     AvroReadOptions, CsvReadOptions, ParquetReadOptions, SessionConfig, SessionContext,
 };
@@ -48,8 +43,6 @@ struct BallistaContextState {
     scheduler_host: String,
     /// Scheduler port
     scheduler_port: u16,
-    /// Tables that have been registered with this context
-    tables: HashMap<String, Arc<dyn TableProvider>>,
 }
 
 impl BallistaContextState {
@@ -62,7 +55,6 @@ impl BallistaContextState {
             config: config.clone(),
             scheduler_host,
             scheduler_port,
-            tables: HashMap::new(),
         }
     }
 
@@ -211,8 +203,7 @@ impl BallistaContext {
         path: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let ctx = self.context.clone();
-        let df = ctx.read_avro(path, options).await?;
+        let df = self.context.read_avro(path, options).await?;
         Ok(df)
     }
 
@@ -223,8 +214,7 @@ impl BallistaContext {
         path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let ctx = self.context.clone();
-        let df = ctx.read_parquet(path, options).await?;
+        let df = self.context.read_parquet(path, options).await?;
         Ok(df)
     }
 
@@ -235,20 +225,8 @@ impl BallistaContext {
         path: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
-        let ctx = self.context.clone();
-        let df = ctx.read_csv(path, options).await?;
+        let df = self.context.read_csv(path, options).await?;
         Ok(df)
-    }
-
-    /// Register a DataFrame as a table that can be referenced from a SQL query
-    pub fn register_table(
-        &self,
-        name: &str,
-        table: Arc<dyn TableProvider>,
-    ) -> Result<()> {
-        let mut state = self.state.lock();
-        state.tables.insert(name.to_owned(), table);
-        Ok(())
     }
 
     pub async fn register_csv(
@@ -257,12 +235,7 @@ impl BallistaContext {
         path: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
-        match self.read_csv(path, options).await?.to_logical_plan()? {
-            LogicalPlan::TableScan(TableScan { source, .. }) => {
-                self.register_table(name, source_as_provider(&source)?)
-            }
-            _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
-        }
+        self.context.register_csv(name, path, options).await
     }
 
     pub async fn register_parquet(
@@ -271,12 +244,7 @@ impl BallistaContext {
         path: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
-        match self.read_parquet(path, options).await?.to_logical_plan()? {
-            LogicalPlan::TableScan(TableScan { source, .. }) => {
-                self.register_table(name, source_as_provider(&source)?)
-            }
-            _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
-        }
+        self.context.register_parquet(name, path, options).await
     }
 
     pub async fn register_avro(
@@ -285,12 +253,7 @@ impl BallistaContext {
         path: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
-        match self.read_avro(path, options).await?.to_logical_plan()? {
-            LogicalPlan::TableScan(TableScan { source, .. }) => {
-                self.register_table(name, source_as_provider(&source)?)
-            }
-            _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
-        }
+        self.context.register_avro(name, path, options).await
     }
 
     /// is a 'show *' sql
@@ -333,26 +296,12 @@ impl BallistaContext {
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
             let state = self.state.lock();
-            ctx = Arc::new(SessionContext::with_config(
+            ctx = Arc::new(SessionContext::with_config_rt(
                 SessionConfig::new().with_information_schema(
                     state.config.default_with_information_schema(),
                 ),
+                ctx.runtime_env(),
             ));
-        }
-
-        // register tables with DataFusion context
-        {
-            let state = self.state.lock();
-            for (name, prov) in &state.tables {
-                // ctx is shared between queries, check table exists or not before register
-                let table_ref = TableReference::Bare { table: name };
-                if !ctx.table_exist(table_ref)? {
-                    ctx.register_table(
-                        TableReference::Bare { table: name },
-                        Arc::clone(prov),
-                    )?;
-                }
-            }
         }
 
         let plan = ctx.create_logical_plan(sql)?;

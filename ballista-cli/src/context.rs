@@ -17,9 +17,11 @@
 
 //! Context (remote or local)
 
+use ballista_core::utils::with_object_store_provider;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use std::sync::Arc;
 
 /// The CLI supports using a local DataFusion context or a distributed BallistaContext
@@ -38,7 +40,13 @@ impl Context {
 
     /// create a local context using the given config
     pub fn new_local(config: &SessionConfig) -> Context {
-        Context::Local(SessionContext::with_config(config.clone()))
+        Context::Local(SessionContext::with_config_rt(
+            config.clone(),
+            Arc::new(
+                RuntimeEnv::new(with_object_store_provider(RuntimeConfig::default()))
+                    .unwrap(),
+            ),
+        ))
     }
 
     /// execute an SQL statement against the context

@@ -72,7 +72,7 @@ Ballista CLI v0.6.0
 If you want to execute the SQL in ballista by `ballista-cli`, you must build/compile `ballista-cli` first.
 
 ```bash
-cd arrow-datafusion/ballista-cli
+cd arrow-ballista/ballista-cli
 cargo build
 ```
 
