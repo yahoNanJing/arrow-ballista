@@ -31,6 +31,8 @@ build = "build.rs"
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = ["datafusion/force_hash_collisions"]
 simd = ["datafusion/simd"]
+# Used to enable hdfs to be registered in the ObjectStoreRegistry by default
+hdfs = ["datafusion-objectstore-hdfs"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
@@ -40,6 +42,7 @@ async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../../../dependencies/arrow-datafusion/datafusion/core" }
+datafusion-objectstore-hdfs = { git = "https://github.com/yahoNanJing/datafusion-objectstore-hdfs.git", branch = "dissue-2905", optional = true }
 datafusion-proto = { path = "../../../dependencies/arrow-datafusion/datafusion/proto" }
 futures = "0.3"
 hashbrown = "0.12"
