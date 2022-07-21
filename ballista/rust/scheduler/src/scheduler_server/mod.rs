@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use anyhow::Context;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use datafusion::execution::context::SessionState;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::logical_plan::AsLogicalPlan;
+use log::info;
 use tokio::sync::RwLock;
 use tonic::transport::Channel;
 
@@ -29,7 +31,9 @@ use ballista_core::config::{BallistaConfig, TaskSchedulingPolicy};
 use ballista_core::error::Result;
 use ballista_core::event_loop::EventLoop;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
-use ballista_core::serde::protobuf::TaskStatus;
+use ballista_core::serde::protobuf::executor_registration::OptionalHost;
+use ballista_core::serde::protobuf::{ExecutorRegistration, TaskStatus};
+use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata};
 use ballista_core::serde::{AsExecutionPlan, BallistaCodec};
 use ballista_core::utils::default_session_builder;
 
@@ -169,6 +173,53 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             self.query_stage_event_loop.start()?;
         }
 
+        Ok(())
+    }
+
+    async fn try_register_from_heartbeat(
+        &self,
+        addr: String,
+        executor_metadata: ExecutorRegistration,
+    ) -> Result<()> {
+        let metadata = ExecutorMetadata {
+            id: executor_metadata.id,
+            host: executor_metadata
+                .optional_host
+                .map(|h| match h {
+                    OptionalHost::Host(host) => host,
+                })
+                .unwrap_or_else(|| addr),
+            port: executor_metadata.port as u16,
+            grpc_port: executor_metadata.grpc_port as u16,
+            specification: executor_metadata.specification.unwrap().clone().into(),
+        };
+        // save the metadata to cache
+        self.state.save_executor_metadata(metadata.clone()).await?;
+        // cache the executor client
+        {
+            let executor_url = format!("http://{}:{}", metadata.host, metadata.grpc_port);
+            info!("Connect to executor from heartbeat {:?}", executor_url);
+            let executor_client = ExecutorGrpcClient::connect(executor_url)
+                .await
+                .context("Could not connect to executor")
+                .map_err(|e| tonic::Status::internal(format!("{:?}", e)))?;
+            let mut clients = self.executors_client.as_ref().unwrap().write().await;
+            // TODO check duplicated registration
+            clients.insert(metadata.id.clone(), executor_client);
+            info!("Size of executor clients: {:?}", clients.len());
+        }
+        // save the executor data
+        // TODO: consider Corner case:
+        // If the scheduler restart, and one executor is doing some tasks.
+        // The available task slots may be greater than the total task slots
+        let executor_data = ExecutorData {
+            executor_id: metadata.id.clone(),
+            total_task_slots: metadata.specification.task_slots,
+            available_task_slots: metadata.specification.task_slots,
+        };
+        self.state
+            .executor_manager
+            .save_executor_data(executor_data);
         Ok(())
     }
 

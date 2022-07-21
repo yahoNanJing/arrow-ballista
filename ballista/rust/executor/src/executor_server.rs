@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use tonic::transport::{Channel, Server};
 use tonic::{Request, Response, Status};
 
@@ -162,15 +162,25 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
     }
 
     async fn heartbeat(&self) {
-        // TODO Error handling
-        self.scheduler
+        match self
+            .scheduler
             .clone()
             .heart_beat_from_executor(HeartBeatParams {
                 executor_id: self.executor.metadata.id.clone(),
                 state: Some(self.get_executor_state().into()),
+                metadata: Some(self.executor.metadata.clone()),
             })
             .await
-            .unwrap();
+        {
+            // TODO heartbeat result
+            Ok(_heartbeat_result) => {
+                // ignore the result
+            }
+            Err(e) => {
+                // just log the warn and not panic
+                warn!("Send the heartbeat and meet the error: {:?}", e);
+            }
+        }
     }
 
     async fn run_task(&self, task: TaskDefinition) -> Result<(), BallistaError> {

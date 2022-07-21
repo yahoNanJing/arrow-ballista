@@ -223,18 +223,55 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<HeartBeatParams>,
     ) -> Result<Response<HeartBeatResult>, Status> {
-        let HeartBeatParams { executor_id, state } = request.into_inner();
-
+        let addr = request.remote_addr();
+        let HeartBeatParams {
+            executor_id,
+            state,
+            metadata,
+        } = request.into_inner();
         debug!("Received heart beat request for {:?}", executor_id);
         trace!("Related executor state is {:?}", state);
         let executor_heartbeat = ExecutorHeartbeat {
-            executor_id,
+            executor_id: executor_id.clone(),
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards")
                 .as_secs(),
             state,
         };
+
+        // try save the executor metadata
+        if self
+            .state
+            .get_executor_metadata(executor_id.as_str())
+            .is_none()
+        {
+            match (addr, &metadata) {
+                (Some(addr), Some(executor_metadata)) => {
+                    self.try_register_from_heartbeat(
+                        addr.ip().to_string(),
+                        executor_metadata.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        let message = format!(
+                            "Can not try to save the executor metadata info from the heartbeat: {:?}",
+                            e
+                        );
+                        error!("{:?}", message);
+                        Status::internal(message)
+                    })?;
+                }
+                (_, _) => {
+                    return Err(Status::invalid_argument(format!(
+                        "Can't get executor addr {:?} or metadata {:?}",
+                        addr, metadata
+                    )));
+                }
+            }
+        }
+
+        // update the heartbeat cache
         self.state
             .executor_manager
             .save_executor_heartbeat(executor_heartbeat);
@@ -265,6 +302,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     task_slots: num_tasks as i32,
                 });
         } else {
+            // TODO, corner case
+            // If the schedule restart and collect the executor metadata from the heartbeat,
+            // the scheduler will miss some doing tasks information
             error!("Fail to get executor data for {:?}", &executor_id);
         }
 
