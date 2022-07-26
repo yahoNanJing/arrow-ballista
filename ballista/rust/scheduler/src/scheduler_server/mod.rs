@@ -191,7 +191,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                 .unwrap_or_else(|| addr),
             port: executor_metadata.port as u16,
             grpc_port: executor_metadata.grpc_port as u16,
-            specification: executor_metadata.specification.unwrap().clone().into(),
+            specification: executor_metadata.specification.unwrap().into(),
         };
         // save the metadata to cache
         self.state.save_executor_metadata(metadata.clone()).await?;
