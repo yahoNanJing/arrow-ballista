@@ -74,6 +74,7 @@ impl DistributedPlanner {
             new_plan,
             None,
         )?);
+        info!("finished planning");
         Ok(stages)
     }
 
