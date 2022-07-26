@@ -133,9 +133,11 @@ async fn main() -> Result<()> {
         opt.concurrent_tasks,
     ));
 
-    let scheduler = SchedulerGrpcClient::connect(scheduler_url)
+    let scheduler = SchedulerGrpcClient::connect(scheduler_url.clone())
         .await
         .context("Could not connect to scheduler")?;
+
+    info!("Connect to the scheduler {:?}", scheduler_url);
 
     let default_codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
         BallistaCodec::default();

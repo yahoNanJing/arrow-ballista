@@ -601,6 +601,7 @@ message RegisterExecutorResult {
 message HeartBeatParams {
   string executor_id = 1;
   ExecutorState state = 2;
+  ExecutorRegistration metadata = 3;
 }
 
 message HeartBeatResult {
