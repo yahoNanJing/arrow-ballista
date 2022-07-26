@@ -130,6 +130,7 @@ async fn main() -> Result<()> {
         &work_dir,
         runtime,
         metrics_collector,
+        opt.concurrent_tasks,
     ));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
