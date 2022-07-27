@@ -100,6 +100,53 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                                 job_id, stage_id
                             ))
                         })?;
+
+                let plan_clone = plan.clone();
+                let output_partitioning = if let Some(shuffle_writer) =
+                plan_clone.as_any().downcast_ref::<ShuffleWriterExec>()
+                {
+                    shuffle_writer.shuffle_output_partitioning()
+                } else {
+                    return Err(BallistaError::General(format!(
+                        "Task root plan was not a ShuffleWriterExec: {:?}",
+                        plan_clone
+                    )));
+                };
+
+                let mut buf: Vec<u8> = vec![];
+                U::try_from_physical_plan(
+                    plan.clone(),
+                    self.get_codec().physical_extension_codec(),
+                )
+                    .and_then(|m| m.try_encode(&mut buf))
+                    .map_err(|e| {
+                        tonic::Status::internal(format!(
+                            "error serializing execution plan: {:?}",
+                            e
+                        ))
+                    })?;
+
+                let session_id = self.get_session_from_job(&job_id).expect("session id does not exist for job");
+                let session_props = self
+                    .session_registry()
+                    .lookup_session(&session_id)
+                    .await
+                    .expect("SessionContext does not exist in SessionContextRegistry.")
+                    .copied_config()
+                    .to_props();
+                let task_props = session_props
+                    .iter()
+                    .map(|(k, v)| KeyValuePair {
+                        key: k.to_owned(),
+                        value: v.to_owned(),
+                    })
+                    .collect::<Vec<_>>();
+
+                let output_partitioning = hash_partitioning_to_proto(
+                    output_partitioning,
+                )
+                    .map_err(|_| tonic::Status::internal("TBD".to_string()))?;
+
                 loop {
                     debug!("Go inside fetching task loop for stage {}/{}", job_id, stage_id);
 
@@ -130,56 +177,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                         };
                         tasks_status.push(running_task);
 
-                        let plan_clone = plan.clone();
-                        let output_partitioning = if let Some(shuffle_writer) =
-                            plan_clone.as_any().downcast_ref::<ShuffleWriterExec>()
-                        {
-                            shuffle_writer.shuffle_output_partitioning()
-                        } else {
-                            return Err(BallistaError::General(format!(
-                                "Task root plan was not a ShuffleWriterExec: {:?}",
-                                plan_clone
-                            )));
-                        };
-
-                        let mut buf: Vec<u8> = vec![];
-                        U::try_from_physical_plan(
-                            plan.clone(),
-                            self.get_codec().physical_extension_codec(),
-                        )
-                        .and_then(|m| m.try_encode(&mut buf))
-                        .map_err(|e| {
-                            tonic::Status::internal(format!(
-                                "error serializing execution plan: {:?}",
-                                e
-                            ))
-                        })?;
-
-                        let session_id = self.get_session_from_job(&job_id).expect("session id does not exist for job");
-                        let session_props = self
-                            .session_registry()
-                            .lookup_session(&session_id)
-                            .await
-                            .expect("SessionContext does not exist in SessionContextRegistry.")
-                            .copied_config()
-                            .to_props();
-                        let task_props = session_props
-                            .iter()
-                            .map(|(k, v)| KeyValuePair {
-                                key: k.to_owned(),
-                                value: v.to_owned(),
-                            })
-                            .collect::<Vec<_>>();
-
                         ret[idx].push(TaskDefinition {
-                            plan: buf,
+                            plan: buf.clone(),
                             task_id,
-                            output_partitioning: hash_partitioning_to_proto(
-                                output_partitioning,
-                            )
-                            .map_err(|_| tonic::Status::internal("TBD".to_string()))?,
-                            session_id,
-                            props: task_props,
+                            output_partitioning: output_partitioning.clone(),
+                            session_id: session_id.clone(),
+                            props: task_props.clone(),
                         });
                         executor.1 -= 1;
                         num_tasks += 1;
