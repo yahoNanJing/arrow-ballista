@@ -22,6 +22,7 @@ use ballista_core::serde::scheduler::{ExecutorData, ExecutorDataChange};
 use log::{error, info, warn};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -82,23 +83,36 @@ impl ExecutorManager {
     }
 
     pub(crate) fn update_executor_data(&self, executor_data_change: &ExecutorDataChange) {
-        let mut executors_data = self.executors_data.write();
-        if let Some(executor_data) =
-            executors_data.get_mut(&executor_data_change.executor_id)
+        let executors_data = self.executors_data.read();
+        if let Some(executor_data) = executors_data.get(&executor_data_change.executor_id)
         {
-            let available_task_slots = executor_data.available_task_slots as i32
-                + executor_data_change.task_slots;
-            if available_task_slots < 0 {
-                error!(
-                    "Available task slots {} for executor {} is less than 0",
-                    available_task_slots, executor_data.executor_id
-                );
-            } else {
-                info!(
-                    "available_task_slots for executor {} becomes {}",
-                    executor_data.executor_id, available_task_slots
-                );
-                executor_data.available_task_slots = available_task_slots as u32;
+            let mut cur_available_task_slots =
+                executor_data.available_task_slots.load(Ordering::SeqCst);
+            loop {
+                let new_available_task_slots =
+                    cur_available_task_slots as i32 + executor_data_change.task_slots;
+                if new_available_task_slots < 0 {
+                    error!(
+                        "Available task slots {} for executor {} is less than 0",
+                        new_available_task_slots, executor_data.executor_id
+                    );
+                } else if let Err(cur_slots) =
+                    executor_data.available_task_slots.compare_exchange(
+                        cur_available_task_slots,
+                        new_available_task_slots as u32,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                {
+                    info!("Available task slots number has been changed from {} to {} before updating", cur_available_task_slots, cur_slots);
+                    cur_available_task_slots = cur_slots;
+                } else {
+                    info!(
+                        "available_task_slots for executor {} becomes {}",
+                        executor_data.executor_id, new_available_task_slots
+                    );
+                    break;
+                }
             }
         } else {
             warn!(
@@ -118,28 +132,40 @@ impl ExecutorManager {
     /// 2. secondly available task slots > 0
     #[cfg(not(test))]
     #[allow(dead_code)]
-    pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
-        let mut res = {
+    pub(crate) fn get_available_executors_data(&self) -> Vec<(String, u32)> {
+        let mut res: Vec<(String, u32)> = {
             let alive_executors = self.get_alive_executors_within_one_minute();
             let executors_data = self.executors_data.read();
             executors_data
                 .iter()
                 .filter_map(|(exec, data)| {
-                    (data.available_task_slots > 0 && alive_executors.contains(exec))
-                        .then(|| data.clone())
+                    let available_task_slots =
+                        data.available_task_slots.load(Ordering::SeqCst);
+                    (available_task_slots > 0 && alive_executors.contains(exec))
+                        .then(|| (data.executor_id.to_owned(), available_task_slots))
                 })
-                .collect::<Vec<ExecutorData>>()
+                .collect()
         };
-        res.sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
+        res.sort_by(|a, b| Ord::cmp(&b.1, &a.1));
         res
     }
 
     #[cfg(test)]
     #[allow(dead_code)]
-    pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
-        let mut res: Vec<ExecutorData> =
-            self.executors_data.read().values().cloned().collect();
-        res.sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
+    pub(crate) fn get_available_executors_data(&self) -> Vec<(String, u32)> {
+        let mut res: Vec<(String, u32)> = {
+            let executors_data = self.executors_data.read();
+            executors_data
+                .iter()
+                .filter_map(|(_exec, data)| {
+                    let available_task_slots =
+                        data.available_task_slots.load(Ordering::SeqCst);
+                    (available_task_slots > 0)
+                        .then(|| (data.executor_id.to_owned(), available_task_slots))
+                })
+                .collect()
+        };
+        res.sort_by(|a, b| Ord::cmp(&b.1, &a.1));
         res
     }
 }

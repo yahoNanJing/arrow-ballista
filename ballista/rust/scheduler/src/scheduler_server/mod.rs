@@ -17,6 +17,7 @@
 
 use anyhow::Context;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -215,7 +216,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         let executor_data = ExecutorData {
             executor_id: metadata.id.clone(),
             total_task_slots: metadata.specification.task_slots,
-            available_task_slots: metadata.specification.task_slots,
+            available_task_slots: Arc::new(AtomicU32::new(
+                metadata.specification.task_slots,
+            )),
         };
         self.state
             .executor_manager
@@ -337,6 +340,7 @@ impl SessionContextRegistry {
 
 #[cfg(all(test, feature = "sled"))]
 mod test {
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -479,7 +483,16 @@ mod test {
             let next_stage_id = stage_id + 1;
             let num_tasks = stage_task_num[stage_id as usize] as usize;
             if matches!(policy, TaskSchedulingPolicy::PullStaged) {
-                let mut executors = test_executors(total_available_task_slots);
+                let mut executors: Vec<(String, u32)> =
+                    test_executors(total_available_task_slots)
+                        .into_iter()
+                        .map(|executor_data| {
+                            (
+                                executor_data.executor_id,
+                                executor_data.available_task_slots.load(Ordering::SeqCst),
+                            )
+                        })
+                        .collect();
                 let _fet_tasks = scheduler
                     .state
                     .fetch_schedulable_tasks(&mut executors, 1)
@@ -530,7 +543,16 @@ mod test {
         {
             let num_tasks = stage_task_num[final_stage_id as usize] as usize;
             if matches!(policy, TaskSchedulingPolicy::PullStaged) {
-                let mut executors = test_executors(total_available_task_slots);
+                let mut executors: Vec<(String, u32)> =
+                    test_executors(total_available_task_slots)
+                        .into_iter()
+                        .map(|executor_data| {
+                            (
+                                executor_data.executor_id,
+                                executor_data.available_task_slots.load(Ordering::SeqCst),
+                            )
+                        })
+                        .collect();
                 let _fet_tasks = scheduler
                     .state
                     .fetch_schedulable_tasks(&mut executors, 1)
@@ -628,12 +650,14 @@ mod test {
             ExecutorData {
                 executor_id: "localhost1".to_owned(),
                 total_task_slots: task_slots,
-                available_task_slots: task_slots,
+                available_task_slots: Arc::new(AtomicU32::new(task_slots)),
             },
             ExecutorData {
                 executor_id: "localhost2".to_owned(),
                 total_task_slots: num_partitions as u32 - task_slots,
-                available_task_slots: num_partitions as u32 - task_slots,
+                available_task_slots: Arc::new(AtomicU32::new(
+                    num_partitions as u32 - task_slots,
+                )),
             },
         ]
     }

@@ -25,7 +25,7 @@ use ballista_core::serde::protobuf::{
     TaskStatus,
 };
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::serde::scheduler::{ExecutorData, PartitionId};
+use ballista_core::serde::scheduler::PartitionId;
 use ballista_core::serde::AsExecutionPlan;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use log::{debug, info};
@@ -35,7 +35,7 @@ pub trait TaskScheduler {
     // For each round, it will fetch tasks from one stage
     async fn fetch_schedulable_tasks(
         &self,
-        available_executors: &mut [ExecutorData],
+        available_executors: &mut [(String, u32)],
         n_round: u32,
     ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError>;
 }
@@ -52,7 +52,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
 {
     async fn fetch_schedulable_tasks(
         &self,
-        available_executors: &mut [ExecutorData],
+        available_executors: &mut [(String, u32)],
         n_round: u32,
     ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError> {
         let mut ret: Vec<Vec<TaskDefinition>> =
@@ -60,7 +60,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
         let mut max_task_num = 0u32;
         for executor in available_executors.iter() {
             ret.push(Vec::new());
-            max_task_num += executor.available_task_slots;
+            max_task_num += executor.1;
         }
 
         let mut tasks_status = vec![];
@@ -105,7 +105,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
 
                     let mut has_tasks = true;
                     for (idx, executor) in available_executors.iter_mut().enumerate() {
-                        if executor.available_task_slots == 0 {
+                        if executor.1 == 0 {
                             has_resources = false;
                             break;
                         }
@@ -125,7 +125,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                         let running_task = TaskStatus {
                             task_id: task_id.clone(),
                             status: Some(task_status::Status::Running(RunningTask {
-                                executor_id: executor.executor_id.to_owned(),
+                                executor_id: executor.0.to_owned(),
                             })),
                         };
                         tasks_status.push(running_task);
@@ -181,7 +181,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                             session_id,
                             props: task_props,
                         });
-                        executor.available_task_slots -= 1;
+                        executor.1 -= 1;
                         num_tasks += 1;
                     }
                     if !has_tasks {

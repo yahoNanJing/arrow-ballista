@@ -17,6 +17,7 @@
 
 use std::convert::TryInto;
 use std::ops::Deref;
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -123,11 +124,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 tonic::Status::internal(msg)
             })?;
             let task: Result<Option<_>, Status> = if can_accept_task {
-                let mut executors_data = vec![ExecutorData {
-                    executor_id: metadata.id.clone(),
-                    total_task_slots: 1,
-                    available_task_slots: 1,
-                }];
+                let mut executors_data = vec![(metadata.id.to_owned(), 1)];
                 let (mut tasks, num_tasks) = self
                     .state
                     .fetch_schedulable_tasks(&mut executors_data, 1)
@@ -205,7 +202,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             let executor_data = ExecutorData {
                 executor_id: metadata.id.clone(),
                 total_task_slots: metadata.specification.task_slots,
-                available_task_slots: metadata.specification.task_slots,
+                available_task_slots: Arc::new(AtomicU32::new(
+                    metadata.specification.task_slots,
+                )),
             };
             self.state
                 .executor_manager

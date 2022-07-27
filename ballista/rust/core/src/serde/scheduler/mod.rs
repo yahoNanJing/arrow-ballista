@@ -15,19 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use datafusion::arrow::array::{
     ArrayBuilder, StructArray, StructBuilder, UInt64Array, UInt64Builder,
 };
 use datafusion::arrow::datatypes::{DataType, Field};
-
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::Partitioning;
 use serde::Serialize;
 
-use super::protobuf;
 use crate::error::BallistaError;
+
+use super::protobuf;
 
 pub mod from_proto;
 pub mod to_proto;
@@ -140,11 +141,11 @@ impl From<protobuf::ExecutorSpecification> for ExecutorSpecification {
 }
 
 /// From Spark, available resources for an executor, like available task slots
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct ExecutorData {
     pub executor_id: String,
     pub total_task_slots: u32,
-    pub available_task_slots: u32,
+    pub available_task_slots: Arc<AtomicU32>,
 }
 
 pub struct ExecutorDataChange {
@@ -167,7 +168,7 @@ impl Into<protobuf::ExecutorData> for ExecutorData {
                     self.total_task_slots,
                 ),
                 available: protobuf::executor_resource::Resource::TaskSlots(
-                    self.available_task_slots,
+                    self.available_task_slots.load(Ordering::SeqCst),
                 ),
             }]
             .into_iter()
@@ -189,7 +190,7 @@ impl From<protobuf::ExecutorData> for ExecutorData {
         let mut ret = Self {
             executor_id: input.executor_id,
             total_task_slots: 0,
-            available_task_slots: 0,
+            available_task_slots: Arc::new(AtomicU32::new(0)),
         };
         for resource in input.resources {
             if let Some(task_slots) = resource.total {
@@ -205,7 +206,7 @@ impl From<protobuf::ExecutorData> for ExecutorData {
                     task_slots,
                 )) = task_slots.resource
                 {
-                    ret.available_task_slots = task_slots
+                    ret.available_task_slots.store(task_slots, Ordering::SeqCst);
                 }
             };
         }
