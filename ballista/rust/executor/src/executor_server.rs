@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::ops::Deref;
+use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -26,21 +25,22 @@ use tonic::transport::{Channel, Server};
 use tonic::{Request, Response, Status};
 
 use ballista_core::error::BallistaError;
-use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
 use ballista_core::serde::protobuf::executor_grpc_server::{
     ExecutorGrpc, ExecutorGrpcServer,
 };
 use ballista_core::serde::protobuf::executor_registration::OptionalHost;
 use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
 use ballista_core::serde::protobuf::{
-    HeartBeatParams, LaunchTaskParams, LaunchTaskResult, RegisterExecutorParams,
-    StopExecutorParams, StopExecutorResult, TaskDefinition, TaskStatus,
-    UpdateTaskStatusParams,
+    HeartBeatParams, LaunchMultiTaskParams, LaunchTaskParams, LaunchTaskResult,
+    MultiTaskDefinition, RegisterExecutorParams, StopExecutorParams, StopExecutorResult,
+    TaskDefinition, TaskStatus, UpdateTaskStatusParams,
 };
-use ballista_core::serde::scheduler::ExecutorState;
+use ballista_core::serde::scheduler;
+use ballista_core::serde::scheduler::{
+    PartitionId, PartitionIds, SharedTaskContext, SimpleFunctionRegistry,
+};
 use ballista_core::serde::{AsExecutionPlan, BallistaCodec};
 use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use tokio::sync::mpsc::error::TryRecvError;
 
@@ -54,7 +54,7 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     codec: BallistaCodec<T, U>,
 ) {
     // TODO make the buffer size configurable
-    let (tx_task, rx_task) = mpsc::channel::<TaskDefinition>(1000);
+    let (tx_task, rx_task) = mpsc::channel::<(PartitionId, SharedTaskContext)>(1000);
     let (tx_task_status, rx_task_status) = mpsc::channel::<TaskStatus>(1000);
 
     let executor_server = ExecutorServer::new(
@@ -143,7 +143,7 @@ pub struct ExecutorServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPl
 
 #[derive(Clone)]
 struct ExecutorEnv {
-    tx_task: mpsc::Sender<TaskDefinition>,
+    tx_task: mpsc::Sender<(PartitionId, SharedTaskContext)>,
     tx_task_status: mpsc::Sender<TaskStatus>,
 }
 
@@ -190,55 +190,25 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         }
     }
 
-    async fn run_task(&self, task: TaskDefinition) -> Result<(), BallistaError> {
-        let task_id = task.task_id.unwrap();
+    async fn run_task(
+        &self,
+        task: (PartitionId, SharedTaskContext),
+    ) -> Result<(), BallistaError> {
+        let task_id = task.0;
         let task_id_log = format!(
             "{}/{}/{}",
             task_id.job_id, task_id.stage_id, task_id.partition_id
         );
         info!("Start to run task {}", task_id_log);
 
-        let runtime = self.executor.runtime.clone();
-        let session_id = task.session_id;
-        let mut task_props = HashMap::new();
-        for kv_pair in task.props {
-            task_props.insert(kv_pair.key, kv_pair.value);
-        }
-
-        let mut task_scalar_functions = HashMap::new();
-        let mut task_aggregate_functions = HashMap::new();
-        // TODO combine the functions from Executor's functions and TaskDefintion's function resources
-        for scalar_func in self.executor.scalar_functions.clone() {
-            task_scalar_functions.insert(scalar_func.0, scalar_func.1);
-        }
-        for agg_func in self.executor.aggregate_functions.clone() {
-            task_aggregate_functions.insert(agg_func.0, agg_func.1);
-        }
         let task_context = Arc::new(TaskContext::new(
             task_id_log.clone(),
-            session_id,
-            task_props,
-            task_scalar_functions,
-            task_aggregate_functions,
-            runtime.clone(),
+            task.1.session_id,
+            task.1.props,
+            task.1.function_registry.scalar_functions,
+            task.1.function_registry.aggregate_functions,
+            self.executor.runtime.clone(),
         ));
-
-        let encoded_plan = &task.plan.as_slice();
-
-        let plan: Arc<dyn ExecutionPlan> =
-            U::try_decode(encoded_plan).and_then(|proto| {
-                proto.try_into_physical_plan(
-                    task_context.deref(),
-                    runtime.deref(),
-                    self.codec.physical_extension_codec(),
-                )
-            })?;
-
-        let shuffle_output_partitioning = parse_protobuf_hash_partitioning(
-            task.output_partitioning.as_ref(),
-            task_context.as_ref(),
-            plan.schema().as_ref(),
-        )?;
 
         let execution_result = self
             .executor
@@ -246,16 +216,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 task_id.job_id.clone(),
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
-                plan,
+                task.1.plan,
                 task_context,
-                shuffle_output_partitioning,
+                task.1.output_partitioning,
             )
             .await;
         info!("Done with task {}", task_id_log);
         debug!("Statistics: {:?}", execution_result);
 
         let executor_id = &self.executor.metadata.id;
-        let task_status = as_task_status(execution_result, executor_id.clone(), task_id);
+        let task_status =
+            as_task_status(execution_result, executor_id.clone(), task_id.into());
 
         let task_status_sender = self.executor_env.tx_task_status.clone();
         task_status_sender.send(task_status).await.unwrap();
@@ -264,8 +235,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
     }
 
     // TODO with real state
-    fn get_executor_state(&self) -> ExecutorState {
-        ExecutorState {
+    fn get_executor_state(&self) -> scheduler::ExecutorState {
+        scheduler::ExecutorState {
             available_memory_size: u64::MAX,
         }
     }
@@ -303,7 +274,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
 
     async fn start(
         &self,
-        mut rx_task: mpsc::Receiver<TaskDefinition>,
+        mut rx_task: mpsc::Receiver<(PartitionId, SharedTaskContext)>,
         mut rx_task_status: mpsc::Receiver<TaskStatus>,
     ) {
         // loop for task status reporting
@@ -365,25 +336,21 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
             );
             loop {
                 if let Some(task) = rx_task.recv().await {
-                    if let Some(task_id) = &task.task_id {
-                        let task_id_log = format!(
-                            "{}/{}/{}",
-                            task_id.job_id, task_id.stage_id, task_id.partition_id
-                        );
-                        info!("Received task {:?}", &task_id_log);
+                    let task_id_log = format!(
+                        "{}/{}/{}",
+                        task.0.job_id, task.0.stage_id, task.0.partition_id
+                    );
+                    info!("Received task {:?}", &task_id_log);
 
-                        let server = executor_server.clone();
-                        dedicated_executor.spawn(async move {
-                            server.run_task(task).await.unwrap_or_else(|e| {
-                                error!(
-                                    "Fail to run the task {:?} due to {:?}",
-                                    task_id_log, e
-                                );
-                            });
+                    let server = executor_server.clone();
+                    dedicated_executor.spawn(async move {
+                        server.run_task(task).await.unwrap_or_else(|e| {
+                            error!(
+                                "Fail to run the task {:?} due to {:?}",
+                                task_id_log, e
+                            );
                         });
-                    } else {
-                        error!("There's no task id in the task definition {:?}", task);
-                    }
+                    });
                 } else {
                     info!("Channel is closed and will exit the loop");
                     return;
@@ -404,7 +371,64 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorGrpc
         let tasks = request.into_inner().task;
         let task_sender = self.executor_env.tx_task.clone();
         for task in tasks {
-            task_sender.send(task).await.unwrap();
+            let task_id = task.task_id.clone().unwrap().into();
+            let function_registry = get_function_registry(&task, self.executor.as_ref());
+            let task_ctx: SharedTaskContext = (
+                task,
+                function_registry,
+                self.executor.runtime.as_ref(),
+                &self.codec,
+            )
+                .try_into()
+                .map_err(|e| {
+                    tonic::Status::internal(format!(
+                        "Could not deserialize task definition: {}",
+                        e
+                    ))
+                })?;
+            task_sender.send((task_id, task_ctx)).await.unwrap();
+        }
+        Ok(Response::new(LaunchTaskResult { success: true }))
+    }
+
+    /// by this interface, it can reduce the deserialization cost for multiple tasks
+    /// belong to the same job stage running on the same one executor
+    async fn launch_multi_task(
+        &self,
+        request: Request<LaunchMultiTaskParams>,
+    ) -> Result<Response<LaunchTaskResult>, Status> {
+        let multi_tasks = request.into_inner().multi_tasks;
+        let task_sender = self.executor_env.tx_task.clone();
+        for multi_task in multi_tasks {
+            let task_ids: PartitionIds = multi_task.task_ids.clone().unwrap().into();
+            let function_registry =
+                get_function_registry2(&multi_task, self.executor.as_ref());
+            let task_ctx: SharedTaskContext = (
+                multi_task,
+                function_registry,
+                self.executor.runtime.as_ref(),
+                &self.codec,
+            )
+                .try_into()
+                .map_err(|e| {
+                    tonic::Status::internal(format!(
+                        "Could not deserialize task definition: {}",
+                        e
+                    ))
+                })?;
+            for partition_id in task_ids.partition_ids.into_iter() {
+                task_sender
+                    .send((
+                        PartitionId::new(
+                            &task_ids.job_id,
+                            task_ids.stage_id,
+                            partition_id,
+                        ),
+                        task_ctx.clone(),
+                    ))
+                    .await
+                    .unwrap();
+            }
         }
         Ok(Response::new(LaunchTaskResult { success: true }))
     }
@@ -414,5 +438,29 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorGrpc
         _request: Request<StopExecutorParams>,
     ) -> Result<Response<StopExecutorResult>, Status> {
         todo!()
+    }
+}
+
+/// Get the function registry for an executor task with combining both UDFs and UDFSs
+fn get_function_registry(
+    _task: &TaskDefinition,
+    executor: &Executor,
+) -> SimpleFunctionRegistry {
+    // TODO combine the functions from Executor's functions and TaskDefintion's function resources
+    SimpleFunctionRegistry {
+        scalar_functions: executor.scalar_functions.clone(),
+        aggregate_functions: executor.aggregate_functions.clone(),
+    }
+}
+
+/// Get the function registry for a set of executor tasks with combining both UDFs and UDFSs
+fn get_function_registry2(
+    _multi_task: &MultiTaskDefinition,
+    executor: &Executor,
+) -> SimpleFunctionRegistry {
+    // TODO combine the functions from Executor's functions and TaskDefintion's function resources
+    SimpleFunctionRegistry {
+        scalar_functions: executor.scalar_functions.clone(),
+        aggregate_functions: executor.aggregate_functions.clone(),
     }
 }

@@ -21,14 +21,15 @@ use async_trait::async_trait;
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf::{
-    job_status, task_status, FailedJob, KeyValuePair, RunningTask, TaskDefinition,
+    job_status, task_status, FailedJob, KeyValuePair, MultiTaskDefinition, RunningTask,
     TaskStatus,
 };
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::serde::scheduler::PartitionId;
+use ballista_core::serde::scheduler::{PartitionId, PartitionIds};
 use ballista_core::serde::AsExecutionPlan;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use log::{debug, info};
+use std::collections::HashMap;
 
 #[async_trait]
 pub trait TaskScheduler {
@@ -37,7 +38,7 @@ pub trait TaskScheduler {
         &self,
         available_executors: &mut [(String, u32)],
         n_round: u32,
-    ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError>;
+    ) -> Result<(Vec<Vec<MultiTaskDefinition>>, usize), BallistaError>;
 }
 
 pub trait StageScheduler {
@@ -54,12 +55,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
         &self,
         available_executors: &mut [(String, u32)],
         n_round: u32,
-    ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError> {
-        let mut ret: Vec<Vec<TaskDefinition>> =
+    ) -> Result<(Vec<Vec<MultiTaskDefinition>>, usize), BallistaError> {
+        let mut ret: Vec<HashMap<StageKey, MultiTaskDefinition>> =
             Vec::with_capacity(available_executors.len());
         let mut max_task_num = 0u32;
         for executor in available_executors.iter() {
-            ret.push(Vec::new());
+            ret.push(HashMap::new());
             max_task_num += executor.1;
         }
 
@@ -162,10 +163,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                             break;
                         }
 
+                        let task_idx = tasks[num_tasks];
                         let task_id = PartitionId {
                             job_id: job_id.clone(),
                             stage_id: stage_id as usize,
-                            partition_id: tasks[num_tasks] as usize,
+                            partition_id: task_idx as usize,
                         };
 
                         let task_id = Some(task_id.into());
@@ -177,13 +179,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                         };
                         tasks_status.push(running_task);
 
-                        ret[idx].push(TaskDefinition {
-                            plan: buf.clone(),
-                            task_id,
-                            output_partitioning: output_partitioning.clone(),
-                            session_id: session_id.clone(),
-                            props: task_props.clone(),
-                        });
+                        if let Some(multi_tasks) = ret[idx].get_mut(&(job_id.clone(), stage_id)) {
+                            multi_tasks.task_ids.as_mut().unwrap().partition_ids.push(task_idx)
+                        } else {
+                            let partition_ids = PartitionIds {
+                                job_id: job_id.clone(),
+                                stage_id: stage_id as usize,
+                                partition_ids: vec![task_idx as usize],
+                            };
+                            ret[idx].insert((job_id.clone(), stage_id),MultiTaskDefinition {
+                                task_ids: Some(partition_ids.into()),
+                                plan: buf.clone(),
+                                output_partitioning: output_partitioning.clone(),
+                                session_id: session_id.clone(),
+                                props: task_props.clone(),
+                            });
+                        }
                         executor.1 -= 1;
                         num_tasks += 1;
                     }
@@ -210,6 +221,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
         // No need to deal with the stage event, since the task status is changing from pending to running
         self.stage_manager.update_tasks_status(tasks_status);
 
-        Ok((ret, total_task_num))
+        Ok((
+            ret.into_iter()
+                .map(|tasks| tasks.into_iter().map(|(_, task)| task).collect())
+                .collect(),
+            total_task_num,
+        ))
     }
 }

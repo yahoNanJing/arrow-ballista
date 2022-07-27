@@ -44,9 +44,9 @@ use ballista_core::serde::protobuf::scheduler_grpc_server::SchedulerGrpc;
 use ballista_core::serde::protobuf::{
     job_status, ExecuteQueryParams, ExecuteQueryResult, ExecutorHeartbeat, FailedJob,
     GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult,
-    HeartBeatParams, HeartBeatResult, JobStatus, PollWorkParams, PollWorkResult,
-    QueuedJob, RegisterExecutorParams, RegisterExecutorResult, UpdateTaskStatusParams,
-    UpdateTaskStatusResult,
+    HeartBeatParams, HeartBeatResult, JobStatus, PartitionId, PollWorkParams,
+    PollWorkResult, QueuedJob, RegisterExecutorParams, RegisterExecutorResult,
+    TaskDefinition, UpdateTaskStatusParams, UpdateTaskStatusResult,
 };
 use ballista_core::serde::scheduler::{
     ExecutorData, ExecutorDataChange, ExecutorMetadata,
@@ -141,7 +141,19 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     let mut task = tasks.pop().unwrap();
                     assert_eq!(task.len(), 1);
                     let task = task.pop().unwrap();
-                    Ok(Some(task))
+                    let mut task_ids = task.task_ids.unwrap();
+                    assert_eq!(task_ids.partition_ids.len(), 1);
+                    Ok(Some(TaskDefinition {
+                        task_id: Some(PartitionId {
+                            job_id: task_ids.job_id,
+                            stage_id: task_ids.stage_id,
+                            partition_id: task_ids.partition_ids.pop().unwrap(),
+                        }),
+                        plan: task.plan,
+                        output_partitioning: task.output_partitioning,
+                        session_id: task.session_id,
+                        props: task.props,
+                    }))
                 }
             } else {
                 Ok(None)

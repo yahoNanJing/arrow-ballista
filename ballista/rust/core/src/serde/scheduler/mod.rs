@@ -15,18 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::{collections::HashMap, fmt, sync::Arc};
-
 use datafusion::arrow::array::{
     ArrayBuilder, StructArray, StructBuilder, UInt64Array, UInt64Builder,
 };
 use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::common::DataFusionError;
+use datafusion::execution::FunctionRegistry;
+use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::Partitioning;
 use serde::Serialize;
+use std::collections::HashSet;
+use std::sync::atomic::AtomicU32;
+use std::{collections::HashMap, fmt, sync::Arc};
 
-use crate::error::BallistaError;
+use crate::error::Result;
 
 use super::protobuf;
 
@@ -81,63 +84,10 @@ pub struct ExecutorMetadata {
     pub specification: ExecutorSpecification,
 }
 
-#[allow(clippy::from_over_into)]
-impl Into<protobuf::ExecutorMetadata> for ExecutorMetadata {
-    fn into(self) -> protobuf::ExecutorMetadata {
-        protobuf::ExecutorMetadata {
-            id: self.id,
-            host: self.host,
-            port: self.port as u32,
-            grpc_port: self.grpc_port as u32,
-            specification: Some(self.specification.into()),
-        }
-    }
-}
-
-impl From<protobuf::ExecutorMetadata> for ExecutorMetadata {
-    fn from(meta: protobuf::ExecutorMetadata) -> Self {
-        Self {
-            id: meta.id,
-            host: meta.host,
-            port: meta.port as u16,
-            grpc_port: meta.grpc_port as u16,
-            specification: meta.specification.unwrap().into(),
-        }
-    }
-}
-
 /// Specification of an executor, indicting executor resources, like total task slots
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ExecutorSpecification {
     pub task_slots: u32,
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<protobuf::ExecutorSpecification> for ExecutorSpecification {
-    fn into(self) -> protobuf::ExecutorSpecification {
-        protobuf::ExecutorSpecification {
-            resources: vec![protobuf::executor_resource::Resource::TaskSlots(
-                self.task_slots,
-            )]
-            .into_iter()
-            .map(|r| protobuf::ExecutorResource { resource: Some(r) })
-            .collect(),
-        }
-    }
-}
-
-impl From<protobuf::ExecutorSpecification> for ExecutorSpecification {
-    fn from(input: protobuf::ExecutorSpecification) -> Self {
-        let mut ret = Self { task_slots: 0 };
-        for resource in input.resources {
-            if let Some(protobuf::executor_resource::Resource::TaskSlots(task_slots)) =
-                resource.resource
-            {
-                ret.task_slots = task_slots
-            }
-        }
-        ret
-    }
 }
 
 /// From Spark, available resources for an executor, like available task slots
@@ -158,98 +108,11 @@ struct ExecutorResourcePair {
     available: protobuf::executor_resource::Resource,
 }
 
-#[allow(clippy::from_over_into)]
-impl Into<protobuf::ExecutorData> for ExecutorData {
-    fn into(self) -> protobuf::ExecutorData {
-        protobuf::ExecutorData {
-            executor_id: self.executor_id,
-            resources: vec![ExecutorResourcePair {
-                total: protobuf::executor_resource::Resource::TaskSlots(
-                    self.total_task_slots,
-                ),
-                available: protobuf::executor_resource::Resource::TaskSlots(
-                    self.available_task_slots.load(Ordering::SeqCst),
-                ),
-            }]
-            .into_iter()
-            .map(|r| protobuf::ExecutorResourcePair {
-                total: Some(protobuf::ExecutorResource {
-                    resource: Some(r.total),
-                }),
-                available: Some(protobuf::ExecutorResource {
-                    resource: Some(r.available),
-                }),
-            })
-            .collect(),
-        }
-    }
-}
-
-impl From<protobuf::ExecutorData> for ExecutorData {
-    fn from(input: protobuf::ExecutorData) -> Self {
-        let mut ret = Self {
-            executor_id: input.executor_id,
-            total_task_slots: 0,
-            available_task_slots: Arc::new(AtomicU32::new(0)),
-        };
-        for resource in input.resources {
-            if let Some(task_slots) = resource.total {
-                if let Some(protobuf::executor_resource::Resource::TaskSlots(
-                    task_slots,
-                )) = task_slots.resource
-                {
-                    ret.total_task_slots = task_slots
-                }
-            };
-            if let Some(task_slots) = resource.available {
-                if let Some(protobuf::executor_resource::Resource::TaskSlots(
-                    task_slots,
-                )) = task_slots.resource
-                {
-                    ret.available_task_slots.store(task_slots, Ordering::SeqCst);
-                }
-            };
-        }
-        ret
-    }
-}
-
 /// The internal state of an executor, like cpu usage, memory usage, etc
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ExecutorState {
     // in bytes
     pub available_memory_size: u64,
-}
-
-#[allow(clippy::from_over_into)]
-impl Into<protobuf::ExecutorState> for ExecutorState {
-    fn into(self) -> protobuf::ExecutorState {
-        protobuf::ExecutorState {
-            metrics: vec![protobuf::executor_metric::Metric::AvailableMemory(
-                self.available_memory_size,
-            )]
-            .into_iter()
-            .map(|m| protobuf::ExecutorMetric { metric: Some(m) })
-            .collect(),
-        }
-    }
-}
-
-impl From<protobuf::ExecutorState> for ExecutorState {
-    fn from(input: protobuf::ExecutorState) -> Self {
-        let mut ret = Self {
-            available_memory_size: u64::MAX,
-        };
-        for metric in input.metrics {
-            if let Some(protobuf::executor_metric::Metric::AvailableMemory(
-                available_memory_size,
-            )) = metric.metric
-            {
-                ret.available_memory_size = available_memory_size
-            }
-        }
-        ret
-    }
 }
 
 /// Summary of executed partition
@@ -299,7 +162,7 @@ impl PartitionStats {
         ]
     }
 
-    pub fn to_arrow_arrayref(self) -> Result<Arc<StructArray>, BallistaError> {
+    pub fn to_arrow_arrayref(self) -> Result<Arc<StructArray>> {
         let mut field_builders = Vec::new();
 
         let mut num_rows_builder = UInt64Builder::new(1);
@@ -421,4 +284,67 @@ impl ExecutePartitionResult {
     pub fn statistics(&self) -> &PartitionStats {
         &self.stats
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskDefinition {
+    pub task_id: PartitionId,
+    pub plan: Arc<dyn ExecutionPlan>,
+    pub output_partitioning: Option<Partitioning>,
+    pub session_id: String,
+    pub props: HashMap<String, String>,
+}
+
+/// Used for UDFs and UDAFs
+#[derive(Debug, Clone)]
+pub struct SimpleFunctionRegistry {
+    pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+}
+
+impl FunctionRegistry for SimpleFunctionRegistry {
+    fn udfs(&self) -> HashSet<String> {
+        self.scalar_functions.keys().cloned().collect()
+    }
+
+    fn udf(&self, name: &str) -> datafusion::common::Result<Arc<ScalarUDF>> {
+        let result = self.scalar_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "There is no UDF named \"{}\" in the registry",
+                name
+            ))
+        })
+    }
+
+    fn udaf(&self, name: &str) -> datafusion::common::Result<Arc<AggregateUDF>> {
+        let result = self.aggregate_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "There is no UDAF named \"{}\" in the registry",
+                name
+            ))
+        })
+    }
+}
+
+/// Different from TaskContext, it will not include task id.
+/// And it will include its scalar_functions and aggregate_functions
+#[derive(Debug, Clone)]
+pub struct SharedTaskContext {
+    pub plan: Arc<dyn ExecutionPlan>,
+    pub output_partitioning: Option<Partitioning>,
+    pub session_id: String,
+    pub props: HashMap<String, String>,
+    pub function_registry: SimpleFunctionRegistry,
+}
+
+/// Unique identifier for the output partitions of a set of tasks.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PartitionIds {
+    pub job_id: String,
+    pub stage_id: usize,
+    pub partition_ids: Vec<usize>,
 }

@@ -27,7 +27,7 @@ use crate::state::task_scheduler::TaskScheduler;
 use crate::state::SchedulerState;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::event_loop::EventAction;
-use ballista_core::serde::protobuf::{LaunchTaskParams, TaskDefinition};
+use ballista_core::serde::protobuf::{LaunchMultiTaskParams, MultiTaskDefinition};
 use ballista_core::serde::scheduler::ExecutorDataChange;
 use ballista_core::serde::AsExecutionPlan;
 use datafusion_proto::logical_plan::AsLogicalPlan;
@@ -86,7 +86,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     async fn launch_tasks(
         &self,
         executors: &[String],
-        tasks_assigment: Vec<Vec<TaskDefinition>>,
+        tasks_assigment: Vec<Vec<MultiTaskDefinition>>,
     ) -> Result<()> {
         for (idx_executor, tasks) in tasks_assigment.into_iter().enumerate() {
             if !tasks.is_empty() {
@@ -96,12 +96,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     tasks
                         .iter()
                         .map(|task| {
-                            if let Some(task_id) = task.task_id.as_ref() {
+                            if let Some(task_ids) = task.task_ids.as_ref() {
                                 format!(
-                                    "{}/{}/{}",
-                                    task_id.job_id,
-                                    task_id.stage_id,
-                                    task_id.partition_id
+                                    "{}/{}/{:?}",
+                                    task_ids.job_id,
+                                    task_ids.stage_id,
+                                    task_ids.partition_ids
                                 )
                             } else {
                                 "".to_string()
@@ -120,8 +120,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     task_slots: 0 - tasks.len() as i32,
                 };
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        client.launch_task(LaunchTaskParams { task: tasks }).await
+                    if let Err(e) = client
+                        .launch_multi_task(LaunchMultiTaskParams { multi_tasks: tasks })
+                        .await
                     {
                         // TODO deal with launching task failure case
                         error!(
