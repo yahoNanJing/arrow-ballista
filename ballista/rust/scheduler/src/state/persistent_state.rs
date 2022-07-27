@@ -34,6 +34,7 @@ use std::any::type_name;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
+use tokio::time::Instant;
 
 #[derive(Clone)]
 pub(crate) struct PersistentSchedulerState<
@@ -247,7 +248,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         job_id: &str,
         status: &JobStatus,
     ) -> Result<()> {
-        debug!("Saving job metadata: {:?}", status);
+        let now = Instant::now();
         {
             // Save in db
             let key = get_job_key(&self.namespace, job_id);
@@ -261,6 +262,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             jobs.insert(job_id.to_string(), status.clone());
         }
 
+        debug!(
+            "Saving job metadata: {:?}, cost {} second",
+            job_id,
+            now.elapsed().as_secs_f64()
+        );
         Ok(())
     }
 
