@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use log::{debug, warn};
+use log::{debug, error, warn};
 
 use crate::scheduler_server::event::SchedulerServerEvent;
 use crate::scheduler_server::ExecutorsClient;
@@ -114,15 +114,24 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     let clients = self.executors_client.read().await;
                     clients.get(executor_id).unwrap().clone()
                 };
-                // TODO check whether launching task is successful or not
-                let task_num = tasks.len();
-                client.launch_task(LaunchTaskParams { task: tasks }).await?;
-                self.state
-                    .executor_manager
-                    .update_executor_data(&ExecutorDataChange {
-                        executor_id: executor_id.to_owned(),
-                        task_slots: 0 - task_num as i32,
-                    });
+                let executor_manager = self.state.executor_manager.clone();
+                let data_change = ExecutorDataChange {
+                    executor_id: executor_id.to_owned(),
+                    task_slots: 0 - tasks.len() as i32,
+                };
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        client.launch_task(LaunchTaskParams { task: tasks }).await
+                    {
+                        // TODO deal with launching task failure case
+                        error!(
+                            "Fail to launch tasks for {} due to {:?}",
+                            data_change.executor_id, e
+                        );
+                    } else {
+                        executor_manager.update_executor_data(&data_change);
+                    }
+                });
             } else {
                 // Since the task assignment policy is round robin,
                 // if find tasks for one executor is empty, just break fast
