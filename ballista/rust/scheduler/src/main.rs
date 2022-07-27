@@ -139,7 +139,7 @@ async fn start_server(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    env_logger::builder().format_timestamp_millis().init();
 
     // parse options
     let (opt, _remaining_args) =

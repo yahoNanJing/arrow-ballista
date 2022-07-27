@@ -129,7 +129,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
                 .stage_manager
                 .is_running_stage(job_id, stage_id as u32)
             {
-                debug!("stage {}/{} has already been submitted", job_id, stage_id);
+                info!("stage {}/{} has already been submitted", job_id, stage_id);
                 return Ok(());
             }
             if self
@@ -137,7 +137,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
                 .stage_manager
                 .is_pending_stage(job_id, stage_id as u32)
             {
-                debug!(
+                info!(
                     "stage {}/{} has already been added to the pending list",
                     job_id, stage_id
                 );
@@ -160,12 +160,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
                 self.state
                     .stage_manager
                     .add_pending_stage(job_id, stage_id as u32);
+                info!("Stage {:?}/{} added to pending queue", job_id, stage_id);
             } else {
                 self.state.stage_manager.add_running_stage(
                     job_id,
                     stage_id as u32,
                     stage_plan.output_partitioning().partition_count() as u32,
                 );
+                info!("Stage {:?}/{} added to running queue", job_id, stage_id);
             }
         } else {
             return Err(BallistaError::General(format!(

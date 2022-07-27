@@ -64,7 +64,7 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    env_logger::builder().format_timestamp_millis().init();
 
     // parse command-line arguments
     let (opt, _remaining_args) =

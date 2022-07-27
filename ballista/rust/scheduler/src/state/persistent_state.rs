@@ -27,7 +27,7 @@ use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::{protobuf, AsExecutionPlan, BallistaCodec};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::AsLogicalPlan;
-use log::{debug, error};
+use log::{error, info};
 use parking_lot::RwLock;
 use prost::Message;
 use std::any::type_name;
@@ -262,10 +262,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             jobs.insert(job_id.to_string(), status.clone());
         }
 
-        debug!(
-            "Saving job metadata: {:?}, cost {} second",
+        info!(
+            "Saving job metadata: {:?}, cost {}ms",
             job_id,
-            now.elapsed().as_secs_f64()
+            now.elapsed().as_millis()
         );
         Ok(())
     }
@@ -281,6 +281,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         stage_id: usize,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<()> {
+        let now = Instant::now();
         {
             // Save in db
             let key = get_stage_plan_key(&self.namespace, job_id, stage_id as u32);
@@ -303,6 +304,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             stages.insert((job_id.to_string(), stage_id as u32), plan);
         }
 
+        info!(
+            "Saving stage metadata: {:?}/{}, cost {}ms",
+            job_id,
+            stage_id,
+            now.elapsed().as_millis()
+        );
         Ok(())
     }
 
