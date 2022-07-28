@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 
 use crate::scheduler_server::event::SchedulerServerEvent;
 use crate::scheduler_server::ExecutorsClient;
@@ -123,6 +123,26 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     executor_id: executor_id.to_owned(),
                     task_slots: 0 - task_num as i32,
                 };
+
+                let sampling_num = if task_num >= 5 { 5 } else { task_num };
+                let mut task_log_ids = Vec::with_capacity(sampling_num);
+                for task in tasks.iter() {
+                    if let Some(task_ids) = &task.task_ids {
+                        for task_id in &task_ids.partition_ids {
+                            task_log_ids.push(format!(
+                                "{}/{}/{}",
+                                task_ids.job_id, task_ids.stage_id, task_id
+                            ));
+                            if task_log_ids.len() >= sampling_num {
+                                break;
+                            }
+                        }
+                    }
+                    if task_log_ids.len() >= sampling_num {
+                        break;
+                    }
+                }
+                info!("Start to launch tasks {:?}", task_log_ids);
                 tokio::spawn(async move {
                     if let Err(e) = client
                         .launch_multi_task(LaunchMultiTaskParams { multi_tasks: tasks })
@@ -134,6 +154,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                             data_change.executor_id, e
                         );
                     } else {
+                        info!("Finished launching tasks {:?}", task_log_ids);
                         executor_manager.update_executor_data(&data_change);
                     }
                 });

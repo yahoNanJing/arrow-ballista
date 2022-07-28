@@ -297,9 +297,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             task_status,
         } = request.into_inner();
 
-        debug!(
-            "Received task status update request for executor {:?}",
-            executor_id
+        info!(
+            "Received task status update request {:?} for executor {:?}",
+            &task_status, executor_id
         );
         let num_tasks = task_status.len();
         if let Some(executor_data) =
