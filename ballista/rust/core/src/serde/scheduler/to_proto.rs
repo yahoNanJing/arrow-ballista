@@ -171,8 +171,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         let mut plan: Vec<u8> = vec![];
         U::try_from_physical_plan(task.plan.clone(), codec.physical_extension_codec())
             .and_then(|m| m.try_encode(&mut plan))?;
-        let output_partitioning =
-            hash_partitioning_to_proto(task.output_partitioning.as_ref())?;
         let props = task
             .props
             .iter()
@@ -185,7 +183,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         Ok(protobuf::TaskDefinition {
             task_id: Some(task.task_id.into()),
             plan,
-            output_partitioning,
             session_id: task.session_id,
             props,
         })

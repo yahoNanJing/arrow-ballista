@@ -23,9 +23,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use crate::error::{BallistaError, Result};
-use crate::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+use crate::execution_plans::ShuffleWriterExec;
 use crate::serde::protobuf::action::ActionType;
-use crate::serde::protobuf::{KeyValuePair, PhysicalHashRepartition};
+use crate::serde::protobuf::KeyValuePair;
 use crate::serde::scheduler::{
     Action, ExecutorData, ExecutorMetadata, ExecutorSpecification, ExecutorState,
     PartitionId, PartitionIds, PartitionLocation, PartitionStats, SharedTaskContext,
@@ -210,7 +210,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TryInto<SharedTas
 
         create_shared_task_context(
             &task.plan,
-            task.output_partitioning,
             task.session_id,
             task.props,
             function_registry,
@@ -238,7 +237,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TryInto<SharedTas
 
         create_shared_task_context(
             &task.plan,
-            task.output_partitioning,
             task.session_id,
             task.props,
             function_registry,
@@ -253,7 +251,6 @@ fn create_shared_task_context<
     U: 'static + AsExecutionPlan,
 >(
     encoded_plan: &[u8],
-    partitioning: Option<PhysicalHashRepartition>,
     session_id: String,
     task_props: Vec<KeyValuePair>,
     function_registry: SimpleFunctionRegistry,
@@ -268,11 +265,17 @@ fn create_shared_task_context<
         )
     })?;
 
-    let output_partitioning = parse_protobuf_hash_partitioning(
-        partitioning.as_ref(),
-        &function_registry,
-        plan.schema().as_ref(),
-    )?;
+    let output_partitioning = if let Some(shuffle_writer) =
+        plan.clone().as_any().downcast_ref::<ShuffleWriterExec>()
+    {
+        shuffle_writer.shuffle_output_partitioning().cloned()
+    } else {
+        return Err(BallistaError::General(format!(
+            "Task root plan was not a ShuffleWriterExec: {:?}",
+            plan
+        )));
+    };
+
     let mut props = HashMap::new();
     for kv_pair in task_props {
         props.insert(kv_pair.key, kv_pair.value);

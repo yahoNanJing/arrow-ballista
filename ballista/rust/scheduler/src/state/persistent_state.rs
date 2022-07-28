@@ -51,7 +51,8 @@ pub(crate) struct PersistentSchedulerState<
 
     // TODO add remove logic
     jobs: Arc<RwLock<HashMap<String, JobStatus>>>,
-    stages: Arc<RwLock<HashMap<StageKey, Arc<dyn ExecutionPlan>>>>,
+    /// Better to use encoded one to reduce the cost for create task definition
+    stages: Arc<RwLock<HashMap<StageKey, Vec<u8>>>>,
     job2session: Arc<RwLock<HashMap<String, String>>>,
 
     /// DataFusion session contexts that are registered within the Scheduler
@@ -130,7 +131,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .get_from_prefix(&get_stage_prefix(&self.namespace))
             .await?;
 
-        let mut tmp_stages: HashMap<StageKey, Arc<dyn ExecutionPlan>> = HashMap::new();
+        let mut tmp_stages: HashMap<StageKey, Vec<u8>> = HashMap::new();
         {
             for (key, entry) in entries {
                 let (job_id, stage_id) = extract_stage_id_from_stage_key(&key).unwrap();
@@ -160,18 +161,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     .register_session(session_ctx.clone())
                     .await;
 
-                let value = U::try_decode(&entry)?;
-                let runtime = session_ctx.runtime_env();
-                let plan = value.try_into_physical_plan(
-                    session_ctx.deref(),
-                    runtime.deref(),
-                    self.codec.physical_extension_codec(),
-                )?;
-
                 let mut job2_sess = self.job2session.write();
                 job2_sess.insert(job_id.clone(), job_session.session_id);
 
-                tmp_stages.insert((job_id, stage_id), plan);
+                tmp_stages.insert((job_id, stage_id), entry);
             }
         }
         let mut stages = self.stages.write();
@@ -282,27 +275,24 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<()> {
         let now = Instant::now();
-        {
-            // Save in db
-            let key = get_stage_plan_key(&self.namespace, job_id, stage_id as u32);
-            let value = {
-                let mut buf: Vec<u8> = vec![];
-                let proto = U::try_from_physical_plan(
-                    plan.clone(),
-                    self.codec.physical_extension_codec(),
-                )?;
-                proto.try_encode(&mut buf)?;
 
-                buf
-            };
-            self.synchronize_save(key, value).await?;
-        }
+        // Save in db
+        let key = get_stage_plan_key(&self.namespace, job_id, stage_id as u32);
+        let value = {
+            let mut buf: Vec<u8> = vec![];
+            let proto = U::try_from_physical_plan(
+                plan.clone(),
+                self.codec.physical_extension_codec(),
+            )?;
+            proto.try_encode(&mut buf)?;
 
-        {
-            // Save in memory
-            let mut stages = self.stages.write();
-            stages.insert((job_id.to_string(), stage_id as u32), plan);
-        }
+            buf
+        };
+        self.synchronize_save(key, value.clone()).await?;
+
+        // Save in memory
+        let mut stages = self.stages.write();
+        stages.insert((job_id.to_string(), stage_id as u32), value);
 
         info!(
             "Saving stage metadata: {:?}/{}, cost {}ms",
@@ -317,10 +307,43 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         &self,
         job_id: &str,
         stage_id: usize,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
+    ) -> Option<Vec<u8>> {
         let stages = self.stages.read();
         let key = (job_id.to_string(), stage_id as u32);
         stages.get(&key).cloned()
+    }
+
+    pub(crate) async fn get_decoded_stage_plan(
+        &self,
+        job_id: &str,
+        stage_id: usize,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let session_id = self
+            .get_session_from_job(job_id)
+            .unwrap_or_else(|| panic!("session id does not exist for job {}", job_id));
+        let session_ctx = self
+            .session_context_registry
+            .lookup_session(&session_id)
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "Fail to get session context for job {} and session id {}",
+                    job_id, session_id
+                )
+            });
+
+        let stages = self.stages.read();
+        let key = (job_id.to_string(), stage_id as u32);
+
+        if let Some(encoded_plan) = stages.get(&key) {
+            Ok(Some(U::try_decode(encoded_plan)?.try_into_physical_plan(
+                session_ctx.as_ref(),
+                session_ctx.runtime_env().deref(),
+                self.codec.physical_extension_codec(),
+            )?))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn synchronize_save(&self, key: String, value: Vec<u8>) -> Result<()> {

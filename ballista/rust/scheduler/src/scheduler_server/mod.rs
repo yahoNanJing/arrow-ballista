@@ -456,7 +456,7 @@ mod test {
             );
         }
 
-        let stage_task_num = test_get_job_stage_task_num(&scheduler, job_id);
+        let stage_task_num = test_get_job_stage_task_num(&scheduler, job_id).await;
         let first_stage_id = 1u32;
         let final_stage_id = stage_task_num.len() as u32 - 1;
         assert!(scheduler
@@ -662,13 +662,18 @@ mod test {
         ]
     }
 
-    fn test_get_job_stage_task_num(
+    async fn test_get_job_stage_task_num(
         scheduler: &SchedulerServer<LogicalPlanNode, PhysicalPlanNode>,
         job_id: &str,
     ) -> Vec<u32> {
         let mut ret = vec![0, 1];
         let mut stage_id = 1;
-        while let Some(stage_plan) = scheduler.state.get_stage_plan(job_id, stage_id) {
+        while let Some(stage_plan) = scheduler
+            .state
+            .get_decoded_stage_plan(job_id, stage_id)
+            .await
+            .expect("Fail to get decoded stage plan")
+        {
             if let Some(shuffle_writer) =
                 stage_plan.as_any().downcast_ref::<ShuffleWriterExec>()
             {

@@ -144,7 +144,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
                 return Ok(());
             }
         }
-        if let Some(stage_plan) = self.state.get_stage_plan(job_id, stage_id) {
+        if let Some(stage_plan) =
+            self.state.get_decoded_stage_plan(job_id, stage_id).await?
+        {
             if let Some(incomplete_unresolved_shuffles) = self
                 .try_resolve_stage(job_id, stage_id, stage_plan.clone())
                 .await?

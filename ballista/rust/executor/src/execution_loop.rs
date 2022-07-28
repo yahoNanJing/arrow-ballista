@@ -18,7 +18,7 @@
 use crate::as_task_status;
 use crate::executor::Executor;
 use ballista_core::error::BallistaError;
-use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf::{
     scheduler_grpc_client::SchedulerGrpcClient, PollWorkParams, PollWorkResult,
     TaskDefinition, TaskStatus,
@@ -175,11 +175,16 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
             )
         })?;
 
-    let shuffle_output_partitioning = parse_protobuf_hash_partitioning(
-        task.output_partitioning.as_ref(),
-        task_context.as_ref(),
-        plan.schema().as_ref(),
-    )?;
+    let shuffle_output_partitioning = if let Some(shuffle_writer) =
+        plan.clone().as_any().downcast_ref::<ShuffleWriterExec>()
+    {
+        shuffle_writer.shuffle_output_partitioning().cloned()
+    } else {
+        return Err(BallistaError::General(format!(
+            "Task root plan was not a ShuffleWriterExec: {:?}",
+            plan
+        )));
+    };
 
     tokio::spawn(async move {
         use std::panic::AssertUnwindSafe;

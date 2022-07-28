@@ -69,6 +69,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_codec(&self) -> &BallistaCodec<T, U> {
         &self.persistent_state.codec
     }
@@ -159,12 +160,18 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             .await
     }
 
-    pub fn get_stage_plan(
+    pub fn get_stage_plan(&self, job_id: &str, stage_id: usize) -> Option<Vec<u8>> {
+        self.persistent_state.get_stage_plan(job_id, stage_id)
+    }
+
+    pub async fn get_decoded_stage_plan(
         &self,
         job_id: &str,
         stage_id: usize,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.persistent_state.get_stage_plan(job_id, stage_id)
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        self.persistent_state
+            .get_decoded_stage_plan(job_id, stage_id)
+            .await
     }
 
     pub fn session_registry(&self) -> Arc<SessionContextRegistry> {

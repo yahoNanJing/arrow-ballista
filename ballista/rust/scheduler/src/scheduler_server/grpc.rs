@@ -150,7 +150,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                             partition_id: task_ids.partition_ids.pop().unwrap(),
                         }),
                         plan: task.plan,
-                        output_partitioning: task.output_partitioning,
                         session_id: task.session_id,
                         props: task.props,
                     }))
