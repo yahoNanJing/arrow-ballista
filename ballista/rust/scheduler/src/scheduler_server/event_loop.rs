@@ -115,9 +115,13 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     clients.get(executor_id).unwrap().clone()
                 };
                 let executor_manager = self.state.executor_manager.clone();
+                let task_num: usize = tasks
+                    .iter()
+                    .map(|task| task.task_ids.as_ref().unwrap().partition_ids.len())
+                    .sum();
                 let data_change = ExecutorDataChange {
                     executor_id: executor_id.to_owned(),
-                    task_slots: 0 - tasks.len() as i32,
+                    task_slots: 0 - task_num as i32,
                 };
                 tokio::spawn(async move {
                     if let Err(e) = client
