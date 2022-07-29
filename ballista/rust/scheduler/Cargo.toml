@@ -70,3 +70,6 @@ uuid = { version = "1.0", features = ["v4"] }
 [build-dependencies]
 configure_me_codegen = "0.4.1"
 tonic-build = { version = "0.7" }
+
+[profile.release]
+debug = true
