@@ -24,6 +24,7 @@ pub mod executor_server;
 pub mod flight_service;
 pub mod metrics;
 
+#[allow(dead_code)]
 mod cpu_bound_executor;
 mod standalone;
 
