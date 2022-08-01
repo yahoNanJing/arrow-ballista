@@ -403,20 +403,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorGrpc
             let task_ids: PartitionIds = multi_task.task_ids.clone().unwrap().into();
             let function_registry =
                 get_function_registry2(&multi_task, self.executor.as_ref());
-            let task_ctx: SharedTaskContext = (
-                multi_task,
-                function_registry,
-                self.executor.runtime.as_ref(),
-                &self.codec,
-            )
-                .try_into()
-                .map_err(|e| {
-                    tonic::Status::internal(format!(
-                        "Could not deserialize task definition: {}",
-                        e
-                    ))
-                })?;
             for partition_id in task_ids.partition_ids.into_iter() {
+                // Currently we have to deserialize for each task to avoid metrics in the ExecutionPlan
+                // to influence each other. Later we may optimize it.
+                let task_ctx: SharedTaskContext = (
+                    multi_task.clone(),
+                    function_registry.clone(),
+                    self.executor.runtime.as_ref(),
+                    &self.codec,
+                )
+                    .try_into()
+                    .map_err(|e| {
+                        tonic::Status::internal(format!(
+                            "Could not deserialize task definition: {}",
+                            e
+                        ))
+                    })?;
                 task_sender
                     .send((
                         PartitionId::new(
@@ -424,7 +426,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorGrpc
                             task_ids.stage_id,
                             partition_id,
                         ),
-                        task_ctx.clone(),
+                        task_ctx,
                     ))
                     .await
                     .unwrap();
