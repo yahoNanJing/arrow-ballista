@@ -42,7 +42,7 @@ async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../../../dependencies/arrow-datafusion/datafusion/core" }
-datafusion-objectstore-hdfs = { git = "https://github.com/yahoNanJing/datafusion-objectstore-hdfs.git", branch = "dissue-2905", optional = true }
+datafusion-objectstore-hdfs = { git = "https://github.com/yahoNanJing/datafusion-objectstore-hdfs.git", branch = "dissue-2905", features = ["try_spawn_blocking"], optional = true }
 datafusion-proto = { path = "../../../dependencies/arrow-datafusion/datafusion/proto" }
 futures = "0.3"
 hashbrown = "0.12"
