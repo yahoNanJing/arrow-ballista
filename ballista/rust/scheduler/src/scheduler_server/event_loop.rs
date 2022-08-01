@@ -123,6 +123,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     executor_id: executor_id.to_owned(),
                     task_slots: 0 - task_num as i32,
                 };
+                executor_manager.update_executor_data(&data_change);
 
                 let sampling_num = if task_num >= 5 { 5 } else { task_num };
                 let mut task_log_ids = Vec::with_capacity(sampling_num);
@@ -155,7 +156,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         );
                     } else {
                         info!("Finished launching tasks {:?}", task_log_ids);
-                        executor_manager.update_executor_data(&data_change);
                     }
                 });
             } else {

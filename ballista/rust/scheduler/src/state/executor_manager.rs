@@ -96,6 +96,7 @@ impl ExecutorManager {
                         "Available task slots {} for executor {} is less than 0",
                         new_available_task_slots, executor_data.executor_id
                     );
+                    break;
                 } else if let Err(cur_slots) =
                     executor_data.available_task_slots.compare_exchange(
                         cur_available_task_slots,
