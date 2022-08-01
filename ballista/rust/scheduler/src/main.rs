@@ -68,6 +68,8 @@ async fn start_server(
     addr: SocketAddr,
     policy: TaskSchedulingPolicy,
 ) -> Result<()> {
+    info!("Number of cpus {}", num_cpus::get());
+
     info!(
         "Ballista v{} Scheduler listening on {:?}",
         BALLISTA_VERSION, addr

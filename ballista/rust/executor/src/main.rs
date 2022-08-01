@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
             .into_string()
             .unwrap(),
     );
+    info!("Number of cpus {}", num_cpus::get());
     info!("Running with config:");
     info!("work_dir: {}", work_dir);
     info!("concurrent_tasks: {}", opt.concurrent_tasks);
