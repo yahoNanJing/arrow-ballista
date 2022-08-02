@@ -297,7 +297,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             task_status,
         } = request.into_inner();
 
-        info!(
+        debug!(
             "Received task status update request {:?} for executor {:?}",
             &task_status, executor_id
         );

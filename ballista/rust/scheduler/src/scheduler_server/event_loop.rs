@@ -143,7 +143,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         break;
                     }
                 }
-                info!("Start to launch tasks {:?}", task_log_ids);
+                debug!("Start to launch tasks {:?}", task_log_ids);
                 tokio::spawn(async move {
                     if let Err(e) = client
                         .launch_multi_task(LaunchMultiTaskParams { multi_tasks: tasks })
@@ -155,7 +155,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                             data_change.executor_id, e
                         );
                     } else {
-                        info!("Finished launching tasks {:?}", task_log_ids);
+                        debug!("Finished launching tasks {:?}", task_log_ids);
                     }
                 });
             } else {
