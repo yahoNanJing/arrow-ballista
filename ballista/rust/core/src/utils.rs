@@ -69,8 +69,8 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 
 /// Get a RuntimeConfig with specific ObjectStoreDetector in the ObjectStoreRegistry
 pub fn with_object_store_provider(config: RuntimeConfig) -> RuntimeConfig {
-    config.with_object_store_registry(ObjectStoreRegistry::new_with_provider(Some(
-        Arc::new(FeatureBasedObjectStoreProvider),
+    config.with_object_store_registry(Arc::new(ObjectStoreRegistry::new_with_provider(
+        Some(Arc::new(FeatureBasedObjectStoreProvider)),
     )))
 }
 

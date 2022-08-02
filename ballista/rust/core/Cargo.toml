@@ -37,7 +37,7 @@ hdfs = ["datafusion-objectstore-hdfs"]
 [dependencies]
 ahash = { version = "0.7", default-features = false }
 
-arrow-flight = { version = "18.0.0" }
+arrow-flight = { version = "19.0.0" }
 async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }
 clap = { version = "3", features = ["derive", "cargo"] }
@@ -57,7 +57,7 @@ parse_arg = "0.1.3"
 prost = "0.10"
 prost-types = "0.10"
 serde = { version = "1", features = ["derive"] }
-sqlparser = "0.18"
+sqlparser = "0.19"
 tokio = "1.0"
 tonic = "0.7"
 url = "2.2"

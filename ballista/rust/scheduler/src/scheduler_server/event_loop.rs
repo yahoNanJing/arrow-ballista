@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 
 use crate::scheduler_server::event::SchedulerServerEvent;
 use crate::scheduler_server::ExecutorsClient;
