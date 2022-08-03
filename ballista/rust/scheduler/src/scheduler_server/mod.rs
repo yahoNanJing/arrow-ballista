@@ -257,10 +257,28 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 }
 
 /// Create a DataFusion session context that is compatible with Ballista Configuration
-pub fn create_datafusion_context(
+pub fn create_session_context(
     config: &BallistaConfig,
     session_builder: SessionBuilder,
 ) -> Arc<SessionContext> {
+    let session_state = create_session_state(config, session_builder);
+    Arc::new(SessionContext::with_state(session_state))
+}
+
+pub fn create_session_context_with_id(
+    config: &BallistaConfig,
+    session_builder: SessionBuilder,
+    session_id: String,
+) -> Arc<SessionContext> {
+    let mut session_state = create_session_state(config, session_builder);
+    session_state.session_id = session_id;
+    Arc::new(SessionContext::with_state(session_state))
+}
+
+fn create_session_state(
+    config: &BallistaConfig,
+    session_builder: SessionBuilder,
+) -> SessionState {
     let config = SessionConfig::new()
         .with_target_partitions(config.default_shuffle_partitions())
         .with_batch_size(config.default_batch_size())
@@ -268,8 +286,7 @@ pub fn create_datafusion_context(
         .with_repartition_aggregations(config.repartition_aggregations())
         .with_repartition_windows(config.repartition_windows())
         .with_parquet_pruning(config.parquet_pruning());
-    let session_state = session_builder(config);
-    Arc::new(SessionContext::with_state(session_state))
+    session_builder(config)
 }
 
 /// Update the existing DataFusion session context with Ballista Configuration

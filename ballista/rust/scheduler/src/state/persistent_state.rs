@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::scheduler_server::{
-    create_datafusion_context, SessionBuilder, SessionContextRegistry,
+    create_session_context_with_id, SessionBuilder, SessionContextRegistry,
 };
 use crate::state::backend::StateBackendClient;
 use crate::state::stage_manager::StageKey;
@@ -155,8 +155,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     ))
                 })?;
 
-                let session_ctx =
-                    create_datafusion_context(&config, self.session_builder);
+                let session_ctx = create_session_context_with_id(
+                    &config,
+                    self.session_builder,
+                    job_session.session_id.clone(),
+                );
                 self.session_registry()
                     .register_session(session_ctx.clone())
                     .await;
@@ -477,7 +480,7 @@ mod test {
 
     #[tokio::test]
     async fn test_init_from_storage() {
-        let ctx = SessionContext::new();
+        let ctx = Arc::new(SessionContext::new());
 
         let plan = LogicalPlanBuilder::empty(true)
             .build()
@@ -490,7 +493,7 @@ mod test {
         let expected_plan = format!("{:?}", plan);
 
         let job_id = "job-id".to_string();
-        let session_id = "session-id".to_string();
+        let session_id = ctx.session_id();
 
         let config_client = Arc::new(
             StandaloneClient::try_new_temporary().expect("creating config client"),
@@ -505,6 +508,11 @@ mod test {
             default_session_builder,
             BallistaCodec::default(),
         );
+
+        persistent_state
+            .session_registry()
+            .register_session(ctx)
+            .await;
 
         persistent_state
             .save_job_session(&job_id, &session_id, vec![])
@@ -526,13 +534,15 @@ mod test {
 
         assert_eq!(
             persistent_state
-                .get_stage_plan(&job_id, 1)
+                .get_decoded_stage_plan(&job_id, 1)
+                .await
+                .expect("get encoded stage plan")
                 .map(|plan| format!("{:?}", plan)),
             Some(expected_plan.clone())
         );
         assert_eq!(
             persistent_state.get_session_from_job(&job_id),
-            Some("session-id".to_string())
+            Some(session_id.clone())
         );
 
         let persistent_state: PersistentSchedulerState<
@@ -549,13 +559,15 @@ mod test {
 
         assert_eq!(
             persistent_state
-                .get_stage_plan(&job_id, 1)
+                .get_decoded_stage_plan(&job_id, 1)
+                .await
+                .expect("get encoded stage plan")
                 .map(|plan| format!("{:?}", plan)),
             Some(expected_plan.clone())
         );
         assert_eq!(
             persistent_state.get_session_from_job(&job_id),
-            Some("session-id".to_string())
+            Some(session_id)
         );
     }
 }

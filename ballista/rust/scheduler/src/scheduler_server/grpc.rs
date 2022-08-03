@@ -55,7 +55,7 @@ use ballista_core::serde::AsExecutionPlan;
 
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 use crate::scheduler_server::{
-    create_datafusion_context, update_datafusion_context, SchedulerServer,
+    create_session_context, update_datafusion_context, SchedulerServer,
 };
 use crate::state::task_scheduler::TaskScheduler;
 
@@ -424,7 +424,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 }
                 _ => {
                     let df_session =
-                        create_datafusion_context(&config, self.session_builder);
+                        create_session_context(&config, self.session_builder);
                     self.state
                         .session_registry()
                         .register_session(df_session.clone())
@@ -576,7 +576,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 error!("{}", msg);
                 tonic::Status::internal(msg)
             })?;
-            let df_session = create_datafusion_context(&config, self.session_builder);
+            let df_session = create_session_context(&config, self.session_builder);
             self.state
                 .session_registry()
                 .register_session(df_session.clone())
