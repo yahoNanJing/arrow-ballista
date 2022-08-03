@@ -335,11 +335,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 )
             });
 
-        let stages = self.stages.read();
-        let key = (job_id.to_string(), stage_id as u32);
-
-        if let Some(encoded_plan) = stages.get(&key) {
-            Ok(Some(U::try_decode(encoded_plan)?.try_into_physical_plan(
+        if let Some(encoded_plan) = self.get_stage_plan(job_id, stage_id) {
+            Ok(Some(U::try_decode(&encoded_plan)?.try_into_physical_plan(
                 session_ctx.as_ref(),
                 session_ctx.runtime_env().deref(),
                 self.codec.physical_extension_codec(),

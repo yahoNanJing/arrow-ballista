@@ -83,8 +83,8 @@ impl ExecutorManager {
     }
 
     pub(crate) fn update_executor_data(&self, executor_data_change: &ExecutorDataChange) {
-        let executors_data = self.executors_data.read();
-        if let Some(executor_data) = executors_data.get(&executor_data_change.executor_id)
+        if let Some(executor_data) =
+            self.get_executor_data(&executor_data_change.executor_id)
         {
             let mut cur_available_task_slots =
                 executor_data.available_task_slots.load(Ordering::SeqCst);
