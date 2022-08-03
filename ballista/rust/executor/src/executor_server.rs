@@ -17,7 +17,7 @@
 
 use std::convert::TryInto;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
 use log::{debug, error, info, warn};
@@ -180,7 +180,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         {
             // TODO heartbeat result
             Ok(_heartbeat_result) => {
-                // ignore the result
+                info!("Heart beat successfully...");
             }
             Err(e) => {
                 // just log the warn and not panic
@@ -199,6 +199,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             task_id.job_id, task_id.stage_id, task_id.partition_id
         );
         info!("Start to run task {}", task_id_log);
+        let instant = Instant::now();
 
         let task_context = Arc::new(TaskContext::new(
             task_id_log.clone(),
@@ -220,7 +221,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 task.1.output_partitioning,
             )
             .await;
-        info!("Done with task {}", task_id_log);
+        info!(
+            "Done with task {} with elapsed time {}ms",
+            task_id_log,
+            instant.elapsed().as_millis()
+        );
         debug!("Statistics: {:?}", execution_result);
 
         let executor_id = &self.executor.metadata.id;
