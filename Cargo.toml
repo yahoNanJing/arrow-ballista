@@ -25,7 +25,7 @@ members = [
     "examples",
     "ballista-cli",
 ]
-exclude = ["python"]
+exclude = ["python", "dependencies/arrow-datafusion"]
 
 # cargo build --profile release-lto
 [profile.release-lto]

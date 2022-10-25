@@ -1,0 +1,3 @@
+[submodule "DataFusion"]
+	path = dependencies/arrow-datafusion
+	url = git@github.corp.ebay.com:Kylin/DataFusion.git
