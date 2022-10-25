@@ -21,9 +21,10 @@
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 use arrow_flight::sql::ProstMessageExt;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_plan::FunctionRegistry;
-use datafusion::physical_plan::join_utils::JoinSide;
 use datafusion::physical_plan::ExecutionPlan;
+
+use datafusion::execution::FunctionRegistry;
+use datafusion::physical_plan::joins::utils::JoinSide;
 use datafusion_proto::logical_plan::{
     AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
@@ -248,10 +249,7 @@ mod tests {
     use datafusion::error::DataFusionError;
     use datafusion::execution::context::{QueryPlanner, SessionState, TaskContext};
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use datafusion::logical_plan::plan::Extension;
-    use datafusion::logical_plan::{
-        col, DFSchemaRef, Expr, FunctionRegistry, LogicalPlan, UserDefinedLogicalNode,
-    };
+
     use datafusion::physical_plan::expressions::PhysicalSortExpr;
     use datafusion::physical_plan::planner::{DefaultPhysicalPlanner, ExtensionPlanner};
     use datafusion::physical_plan::{
@@ -262,6 +260,12 @@ mod tests {
     use prost::Message;
     use std::any::Any;
 
+    use datafusion::common::DFSchemaRef;
+    use datafusion::datasource::TableProvider;
+    use datafusion::execution::FunctionRegistry;
+    use datafusion::logical_expr::{
+        col, Expr, Extension, LogicalPlan, UserDefinedLogicalNode,
+    };
     use datafusion_proto::from_proto::parse_expr;
     use std::convert::TryInto;
     use std::fmt;
@@ -547,6 +551,27 @@ mod tests {
             } else {
                 Err(DataFusionError::Plan("unsupported plan type".to_string()))
             }
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            _buf: &[u8],
+            _schema: SchemaRef,
+            _ctx: &SessionContext,
+        ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+            Err(DataFusionError::Internal(
+                "unsupported plan type".to_string(),
+            ))
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _node: Arc<dyn TableProvider>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<(), DataFusionError> {
+            Err(DataFusionError::Internal(
+                "unsupported plan type".to_string(),
+            ))
         }
     }
 

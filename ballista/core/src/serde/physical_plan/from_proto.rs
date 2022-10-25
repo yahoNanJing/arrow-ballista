@@ -23,11 +23,12 @@ use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use datafusion::arrow::datatypes::Schema;
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::context::ExecutionProps;
+use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::window_function::WindowFunction;
-use datafusion::logical_plan::FunctionRegistry;
 use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
 use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_plan::file_format::FileScanConfig;
@@ -408,6 +409,8 @@ impl TryInto<FileScanConfig> for &protobuf::FileScanExecConf {
             projection,
             limit: self.limit.as_ref().map(|sl| sl.limit as usize),
             table_partition_cols: vec![],
+            // TODO add configurations to the ballista proto file and construct the real ConfigOptions
+            config_options: ConfigOptions::new().into_shareable(),
         })
     }
 }

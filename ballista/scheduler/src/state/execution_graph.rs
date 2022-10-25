@@ -1581,8 +1581,7 @@ mod test {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::logical_expr::{col, count, sum, Expr};
-    use datafusion::logical_plan::JoinType;
+    use datafusion::logical_expr::{col, count, sum, Expr, JoinType};
     use datafusion::physical_plan::display::DisplayableExecutionPlan;
     use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion::test_util::scan_empty;

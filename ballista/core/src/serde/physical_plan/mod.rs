@@ -23,16 +23,17 @@ use prost::Message;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::config::ConfigOptions;
+use datafusion::datasource::file_format::file_type::FileCompressionType;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_plan::window_frames::WindowFrame;
-use datafusion::logical_plan::FunctionRegistry;
+use datafusion::execution::FunctionRegistry;
+use datafusion::logical_expr::WindowFrame;
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::cross_join::CrossJoinExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
@@ -40,8 +41,8 @@ use datafusion::physical_plan::file_format::{
     AvroExec, CsvExec, FileScanConfig, ParquetExec,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
-use datafusion::physical_plan::join_utils::{ColumnIndex, JoinFilter};
+use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion::physical_plan::joins::{CrossJoinExec, HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
@@ -159,6 +160,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 decode_scan_config(scan.base_conf.as_ref().unwrap())?,
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
+                // TODO the CsvScanExecNode should contain the compression info
+                FileCompressionType::UNCOMPRESSED,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
                 let predicate = scan
@@ -1266,6 +1269,7 @@ fn decode_scan_config(
         projection,
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols: vec![],
+        config_options: ConfigOptions::new().into_shareable(),
     })
 }
 
@@ -1289,15 +1293,18 @@ mod roundtrip_tests {
 
     use datafusion::arrow::array::ArrayRef;
     use datafusion::arrow::datatypes::IntervalUnit;
+    use datafusion::config::ConfigOptions;
     use datafusion::datasource::object_store::ObjectStoreUrl;
     use datafusion::execution::context::ExecutionProps;
-    use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
-    use datafusion::logical_plan::create_udf;
+    use datafusion::logical_expr::{
+        create_udf, BuiltinScalarFunction, JoinType, Operator, Volatility,
+    };
     use datafusion::physical_expr::expressions::DateTimeIntervalExpr;
     use datafusion::physical_expr::ScalarFunctionExpr;
     use datafusion::physical_plan::aggregates::PhysicalGroupBy;
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::make_scalar_function;
+    use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::{
         arrow::{
@@ -1305,7 +1312,6 @@ mod roundtrip_tests {
             datatypes::{DataType, Field, Schema},
         },
         datasource::listing::PartitionedFile,
-        logical_plan::{JoinType, Operator},
         physical_plan::{
             aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
@@ -1313,7 +1319,6 @@ mod roundtrip_tests {
             expressions::{Avg, Column, DistinctCount, PhysicalSortExpr},
             file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
-            hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
             sorts::sort::SortExec,
             AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
@@ -1588,6 +1593,7 @@ mod roundtrip_tests {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
+            config_options: ConfigOptions::new().into_shareable(),
         };
 
         let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
