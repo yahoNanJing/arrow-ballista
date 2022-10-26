@@ -39,7 +39,7 @@ use dashmap::DashMap;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::collections::{HashMap, HashSet};
@@ -217,7 +217,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
     ) -> Result<Vec<QueryStageSchedulerEvent>> {
         let mut job_updates: HashMap<String, Vec<TaskStatus>> = HashMap::new();
         for status in task_status {
-            debug!("Task Update\n{:?}", status);
+            trace!("Task Update\n{:?}", status);
             let job_id = status.job_id.clone();
             let job_task_statuses = job_updates.entry(job_id).or_insert_with(Vec::new);
             job_task_statuses.push(status);
