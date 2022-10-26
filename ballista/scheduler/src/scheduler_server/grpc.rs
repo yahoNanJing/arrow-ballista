@@ -236,7 +236,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             metrics,
             status,
         } = request.into_inner();
-        trace!("Received heart beat request for {:?}", executor_id);
+        debug!("Received heart beat request for {:?}", executor_id);
         let executor_heartbeat = ExecutorHeartbeat {
             executor_id,
             timestamp: SystemTime::now()

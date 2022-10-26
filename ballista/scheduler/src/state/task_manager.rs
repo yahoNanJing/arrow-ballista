@@ -668,16 +668,25 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
     }
 
     #[allow(dead_code)]
-    pub fn prepare_multi_task_definition(
+    /// Prepare a MultiTaskDefinition with multiple tasks belonging to the same job stage
+    fn prepare_multi_task_definition(
         &self,
         tasks: Vec<TaskDescription>,
     ) -> Result<MultiTaskDefinition> {
-        debug!("Preparing multi task definition for {:?}", tasks);
         if let Some(task) = tasks.get(0) {
             let session_id = task.session_id.clone();
             let job_id = task.partition.job_id.clone();
             let stage_id = task.partition.stage_id;
             let stage_attempt_num = task.stage_attempt_num;
+
+            if log::max_level() >= log::Level::Debug {
+                let task_ids: Vec<usize> = tasks
+                    .iter()
+                    .map(|task| task.partition.partition_id)
+                    .collect();
+                debug!("Preparing multi task definition for tasks {:?} belonging to job stage {}/{}", task_ids, job_id, stage_id);
+                trace!("With task details {:?}", tasks);
+            }
 
             if let Some(mut job_info) = self.active_job_cache.get_mut(&job_id) {
                 let plan = if let Some(plan) = job_info.encoded_stage_plans.get(&stage_id)
