@@ -43,7 +43,7 @@ use datafusion_proto::protobuf::LogicalPlanNode;
 use ballista_scheduler::scheduler_server::SchedulerServer;
 use ballista_scheduler::state::backend::{StateBackend, StateBackendClient};
 
-use ballista_core::config::TaskSchedulingPolicy;
+use ballista_core::config::{LogRotationPolicy, TaskSchedulingPolicy};
 use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::default_session_builder;
 use log::info;
@@ -187,7 +187,20 @@ async fn main() -> Result<()> {
     let log_filter = EnvFilter::new(rust_log.unwrap_or(special_mod_log_level));
     // File layer
     if let Some(log_dir) = log_dir {
-        let log_file = tracing_appender::rolling::daily(log_dir, &log_file_name_prefix);
+        let log_file = match opt.log_rotation_policy {
+            LogRotationPolicy::Minutely => {
+                tracing_appender::rolling::minutely(log_dir, &log_file_name_prefix)
+            }
+            LogRotationPolicy::Hourly => {
+                tracing_appender::rolling::hourly(log_dir, &log_file_name_prefix)
+            }
+            LogRotationPolicy::Daily => {
+                tracing_appender::rolling::daily(log_dir, &log_file_name_prefix)
+            }
+            LogRotationPolicy::Never => {
+                tracing_appender::rolling::never(log_dir, &log_file_name_prefix)
+            }
+        };
         tracing_subscriber::fmt()
             .with_ansi(true)
             .with_thread_names(print_thread_info)
