@@ -419,10 +419,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
 
     /// Spawn a delayed future to clean up job data on both Scheduler and Executors
     pub(crate) fn clean_up_failed_job(&self, job_id: String) {
-        self.executor_manager.clean_up_job_data_delayed(
-            job_id.clone(),
-            self.config.clean_up_interval_for_finished_job_data(),
-        );
+        let job_data_id = job_id.clone();
+        let executor_manager = self.executor_manager.clone();
+        tokio::spawn(async move {
+            executor_manager.clean_up_job_data(job_data_id).await;
+        });
         self.task_manager.clean_up_failed_job_delayed(
             job_id,
             self.config.clean_up_interval_for_finished_job_state(),
