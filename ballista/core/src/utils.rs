@@ -49,7 +49,7 @@ use datafusion_proto::logical_plan::{
     AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use futures::StreamExt;
-use log::error;
+use log::{error, info, warn};
 #[cfg(feature = "s3")]
 use object_store::aws::AmazonS3Builder;
 use object_store::ObjectStore;
@@ -57,8 +57,9 @@ use std::io::{BufWriter, Write};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs::File, pin::Pin};
+use tokio::{fs, time};
 use tonic::codegen::StdError;
 use tonic::transport::{Channel, Error, Server};
 use url::Url;
@@ -416,4 +417,103 @@ pub fn collect_plan_metrics(plan: &dyn ExecutionPlan) -> Vec<MetricsSet> {
             .for_each(|e| metrics_array.push(e))
     });
     metrics_array
+}
+
+/// Periodically check and clean up old log files under the specific directory.
+pub fn clean_up_log_loop(
+    log_dir: String,
+    log_clean_up_interval_seconds: u64,
+    log_clean_up_ttl: u64,
+) {
+    info!(
+        "Log file cleaning up for directory {} is enabled and will be checked very {} seconds with ttl {}",
+        log_dir,
+        log_clean_up_interval_seconds,
+        log_clean_up_ttl,
+    );
+
+    let mut interval_time = time::interval(tokio::time::Duration::from_secs(
+        log_clean_up_interval_seconds,
+    ));
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = clean_up_log(&log_dir, log_clean_up_ttl).await {
+                error!(
+                    "Fail to clean up log files under {} due to {:?}",
+                    log_dir, e
+                )
+            }
+            interval_time.tick().await;
+        }
+    });
+}
+
+/// Check and clean up old log files under the specific directory.
+async fn clean_up_log(log_dir: &str, ttl_seconds: u64) -> Result<()> {
+    let mut dir = fs::read_dir(log_dir).await?;
+    let cutoff = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .checked_sub(Duration::from_secs(ttl_seconds))
+        .expect("The cut off time went backwards");
+
+    let mut to_deleted = vec![];
+    while let Some(child) = dir.next_entry().await? {
+        if let Ok(metadata) = child.metadata().await {
+            // only delete regular files
+            if metadata.is_file() {
+                if metadata
+                    .modified()?
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    < cutoff
+                {
+                    to_deleted.push(child.path().into_os_string())
+                }
+            } else {
+                warn!("Found a dir {:?} in clean log skip it.", child.path())
+            }
+        } else {
+            error!("Can not get metadata from file: {:?}", child)
+        }
+    }
+
+    info!("The log files {:?} will be deleted", &to_deleted);
+    for del in to_deleted {
+        if let Err(e) = fs::remove_file(&del).await {
+            error!("Fail to remove the log file {:?} due to {}", del, e);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::utils::clean_up_log;
+    use std::fs::File;
+    use std::time::Duration;
+    use std::{fs, io};
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_clean_up_log() -> Result<(), io::Error> {
+        let tmp_dir = TempDir::new()?.into_path();
+        let log_dir = tmp_dir.as_path().join("logs");
+        let file_path = log_dir.as_path().join("1.log");
+
+        fs::create_dir(&log_dir)?;
+        File::create(&file_path).expect("creating temp file");
+
+        let count1 = fs::read_dir(&log_dir)?.count();
+        assert_eq!(count1, 1);
+
+        let ttl_seconds = 1;
+        tokio::time::sleep(Duration::from_secs(ttl_seconds)).await;
+
+        clean_up_log(log_dir.to_str().unwrap(), 1).await.unwrap();
+        let count2 = fs::read_dir(&log_dir)?.count();
+        assert_eq!(count2, 0);
+
+        Ok(())
+    }
 }

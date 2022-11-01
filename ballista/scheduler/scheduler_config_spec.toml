@@ -130,3 +130,15 @@ name = "log_rotation_policy"
 type = "ballista_core::config::LogRotationPolicy"
 doc = "Tracing log rotation policy, possible values: minutely, hourly, daily, never. Default: daily"
 default = "ballista_core::config::LogRotationPolicy::Daily"
+
+[[param]]
+name = "log_clean_up_interval_seconds"
+type = "u64"
+doc = "Controls the interval in seconds of how long it will wait to check and clean up old logs. zero means disable."
+default = "0"
+
+[[param]]
+name = "log_clean_up_ttl"
+type = "u64"
+doc = "Log ttl in seconds. Default: one day"
+default = "86400"
