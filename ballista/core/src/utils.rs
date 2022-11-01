@@ -426,7 +426,7 @@ pub fn clean_up_log_loop(
     log_clean_up_ttl: u64,
 ) {
     info!(
-        "Log file cleaning up for directory {} is enabled and will be checked very {} seconds with ttl {}",
+        "Log file cleaning up for directory {} is enabled and will be checked very {}s with ttl {}s",
         log_dir,
         log_clean_up_interval_seconds,
         log_clean_up_ttl,
@@ -437,13 +437,13 @@ pub fn clean_up_log_loop(
     ));
     tokio::spawn(async move {
         loop {
+            interval_time.tick().await;
             if let Err(e) = clean_up_log(&log_dir, log_clean_up_ttl).await {
                 error!(
                     "Fail to clean up log files under {} due to {:?}",
                     log_dir, e
                 )
             }
-            interval_time.tick().await;
         }
     });
 }
