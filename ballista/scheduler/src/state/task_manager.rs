@@ -597,12 +597,31 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         tasks: Vec<Vec<TaskDescription>>,
         executor_manager: &ExecutorManager,
     ) -> Result<()> {
-        info!("Launching multi task on executor {:?}", executor.id);
         let multi_tasks: Result<Vec<MultiTaskDefinition>> = tasks
             .into_iter()
             .map(|stage_tasks| self.prepare_multi_task_definition(stage_tasks))
             .collect();
         let multi_tasks = multi_tasks?;
+        if log::max_level() >= log::Level::Info {
+            let multi_tasks_ids: Vec<String> = multi_tasks
+                .iter()
+                .map(|multi_task| {
+                    let task_ids: Vec<u32> = multi_task
+                        .task_ids
+                        .iter()
+                        .map(|task_id| task_id.partition_id)
+                        .collect();
+                    format!(
+                        "{}/{}/{:?}",
+                        multi_task.job_id, multi_task.stage_id, task_ids
+                    )
+                })
+                .collect();
+            info!(
+                "Launching multi task on executor {:?} for {:?}",
+                executor.id, multi_tasks_ids
+            );
+        }
         let mut client = executor_manager.get_client(&executor.id).await?;
         client
             .launch_multi_task(protobuf::LaunchMultiTaskParams {
