@@ -96,6 +96,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
         })
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn try_into_physical_plan(
         &self,
         registry: &dyn FunctionRegistry,
@@ -1464,8 +1465,10 @@ mod roundtrip_tests {
             JoinType::Left,
             JoinType::Right,
             JoinType::Full,
-            JoinType::Anti,
-            JoinType::Semi,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
         ] {
             for partition_mode in
                 &[PartitionMode::Partitioned, PartitionMode::CollectLeft]

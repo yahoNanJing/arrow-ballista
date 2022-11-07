@@ -393,8 +393,8 @@ mod tests {
             None
         }
 
-        fn required_child_distribution(&self) -> Distribution {
-            Distribution::SinglePartition
+        fn required_input_distribution(&self) -> Vec<Distribution> {
+            vec![Distribution::SinglePartition]
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
