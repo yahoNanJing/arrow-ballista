@@ -261,6 +261,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(LocalLimitExec::new(input, limit.fetch as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
+                // TODO Current implementation is not complete, will refine later
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
                     window_agg.input,
                     registry,
@@ -314,7 +315,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &[window_node_expr],
                                     &[],
                                     &[],
-                                    Some(WindowFrame::default()),
+                                    Some(Arc::new(WindowFrame::default())),
                                     &physical_schema,
                                 )?)
                             }
@@ -329,6 +330,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     physical_window_expr,
                     input,
                     Arc::new((&input_schema).try_into()?),
+                    Vec::new(),
+                    None,
                 )?))
             }
             PhysicalPlanType::Aggregate(hash_agg) => {
