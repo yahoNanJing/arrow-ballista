@@ -329,7 +329,7 @@ mod test {
     use ballista_core::utils::default_session_builder;
 
     use crate::scheduler_server::SchedulerServer;
-    use crate::state::backend::standalone::StandaloneClient;
+    use crate::state::backend::sled::SledClient;
 
     use crate::state::executor_manager::ExecutorReservation;
     use crate::state::SchedulerState;
@@ -779,7 +779,7 @@ mod test {
     async fn test_scheduler(
         scheduling_policy: TaskSchedulingPolicy,
     ) -> Result<SchedulerServer<LogicalPlanNode, PhysicalPlanNode>> {
-        let state_storage = Arc::new(StandaloneClient::try_new_temporary()?);
+        let state_storage = Arc::new(SledClient::try_new_temporary()?);
         let mut scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
             SchedulerServer::new_with_policy(
                 "localhost:50050".to_owned(),
@@ -797,7 +797,7 @@ mod test {
 
     async fn test_push_staged_scheduler(
     ) -> Result<SchedulerServer<LogicalPlanNode, PhysicalPlanNode>> {
-        let state_storage = Arc::new(StandaloneClient::try_new_temporary()?);
+        let state_storage = Arc::new(SledClient::try_new_temporary()?);
         let state = Arc::new(SchedulerState::new_with_default_scheduler_name(
             state_storage,
             default_session_builder,

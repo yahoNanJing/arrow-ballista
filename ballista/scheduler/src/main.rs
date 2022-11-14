@@ -37,7 +37,7 @@ use ballista_scheduler::api::{get_routes, EitherBody, Error};
 #[cfg(feature = "etcd")]
 use ballista_scheduler::state::backend::etcd::EtcdClient;
 #[cfg(feature = "sled")]
-use ballista_scheduler::state::backend::standalone::StandaloneClient;
+use ballista_scheduler::state::backend::sled::SledClient;
 use datafusion_proto::protobuf::LogicalPlanNode;
 
 use ballista_scheduler::scheduler_server::SchedulerServer;
@@ -70,6 +70,7 @@ use ballista_scheduler::config::{
 };
 #[cfg(feature = "flight-sql")]
 use ballista_scheduler::flight_sql::FlightSqlServiceImpl;
+use ballista_scheduler::state::backend::memory::MemoryBackendClient;
 use config::prelude::*;
 use tracing_subscriber::EnvFilter;
 
@@ -230,10 +231,6 @@ async fn main() -> Result<()> {
     let addr = addr.parse()?;
 
     let config_backend: Arc<dyn StateBackendClient> = match opt.config_backend {
-        #[cfg(not(any(feature = "sled", feature = "etcd")))]
-        _ => std::compile_error!(
-            "To build the scheduler enable at least one config backend feature (`etcd` or `sled`)"
-        ),
         #[cfg(feature = "etcd")]
         StateBackend::Etcd => {
             let etcd = etcd_client::Client::connect(&[opt.etcd_urls], None)
@@ -248,26 +245,27 @@ async fn main() -> Result<()> {
             )
         }
         #[cfg(feature = "sled")]
-        StateBackend::Standalone => {
+        StateBackend::Sled => {
             if opt.sled_dir.is_empty() {
                 Arc::new(
-                    StandaloneClient::try_new_temporary()
+                    SledClient::try_new_temporary()
                         .context("Could not create standalone config backend")?,
                 )
             } else {
                 println!("{}", opt.sled_dir);
                 Arc::new(
-                    StandaloneClient::try_new(opt.sled_dir)
+                    SledClient::try_new(opt.sled_dir)
                         .context("Could not create standalone config backend")?,
                 )
             }
         }
         #[cfg(not(feature = "sled"))]
-        StateBackend::Standalone => {
+        StateBackend::Sled => {
             unimplemented!(
                 "build the scheduler with the `sled` feature to use the standalone config backend"
             )
         }
+        StateBackend::Memory => Arc::new(MemoryBackendClient::new()),
     };
 
     let scheduling_policy: TaskSchedulingPolicy = opt.scheduler_policy;

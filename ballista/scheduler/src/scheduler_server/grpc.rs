@@ -591,13 +591,13 @@ mod test {
     use ballista_core::utils::default_session_builder;
 
     use crate::state::executor_manager::DEFAULT_EXECUTOR_TIMEOUT_SECONDS;
-    use crate::state::{backend::standalone::StandaloneClient, SchedulerState};
+    use crate::state::{backend::sled::SledClient, SchedulerState};
 
     use super::{SchedulerGrpc, SchedulerServer};
 
     #[tokio::test]
     async fn test_poll_work() -> Result<(), BallistaError> {
-        let state_storage = Arc::new(StandaloneClient::try_new_temporary()?);
+        let state_storage = Arc::new(SledClient::try_new_temporary()?);
         let mut scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
             SchedulerServer::new(
                 "localhost:50050".to_owned(),
@@ -683,7 +683,7 @@ mod test {
 
     #[tokio::test]
     async fn test_stop_executor() -> Result<(), BallistaError> {
-        let state_storage = Arc::new(StandaloneClient::try_new_temporary()?);
+        let state_storage = Arc::new(SledClient::try_new_temporary()?);
         let mut scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
             SchedulerServer::new(
                 "localhost:50050".to_owned(),
@@ -763,7 +763,7 @@ mod test {
     #[tokio::test]
     #[ignore]
     async fn test_expired_executor() -> Result<(), BallistaError> {
-        let state_storage = Arc::new(StandaloneClient::try_new_temporary()?);
+        let state_storage = Arc::new(SledClient::try_new_temporary()?);
         let mut scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
             SchedulerServer::new(
                 "localhost:50050".to_owned(),
