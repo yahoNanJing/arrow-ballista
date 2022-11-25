@@ -475,7 +475,12 @@ impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
                 .map(|n| *n as u32)
                 .collect(),
             schema: Some(conf.file_schema.as_ref().try_into()?),
-            table_partition_cols: conf.table_partition_cols.to_vec(),
+            // TODO add type info to the ballista proto
+            table_partition_cols: conf
+                .table_partition_cols
+                .iter()
+                .map(|col| col.0.to_owned())
+                .collect(),
             object_store_url: conf.object_store_url.to_string(),
         })
     }

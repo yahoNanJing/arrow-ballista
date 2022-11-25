@@ -817,6 +817,7 @@ async fn get_table(
         file_extension: extension.to_owned(),
         target_partitions,
         collect_stat: true,
+        file_sort_order: None,
         table_partition_cols: vec![],
     };
 

@@ -530,6 +530,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let partition_mode = match partition_mode {
                     protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
                     protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
+                    protobuf::PartitionMode::Auto => PartitionMode::Auto,
                 };
                 Ok(Arc::new(HashJoinExec::try_new(
                     left,
@@ -869,6 +870,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             let partition_mode = match exec.partition_mode() {
                 PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
                 PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
+                PartitionMode::Auto => protobuf::PartitionMode::Auto,
             };
 
             Ok(protobuf::PhysicalPlanNode {
@@ -1273,6 +1275,7 @@ fn decode_scan_config(
         projection,
         limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
         table_partition_cols: vec![],
+        output_ordering: None,
         config_options: ConfigOptions::new().into_shareable(),
     })
 }
@@ -1599,6 +1602,7 @@ mod roundtrip_tests {
             projection: None,
             limit: None,
             table_partition_cols: vec![],
+            output_ordering: None,
             config_options: ConfigOptions::new().into_shareable(),
         };
 

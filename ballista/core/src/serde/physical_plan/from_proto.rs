@@ -409,6 +409,8 @@ impl TryInto<FileScanConfig> for &protobuf::FileScanExecConf {
             projection,
             limit: self.limit.as_ref().map(|sl| sl.limit as usize),
             table_partition_cols: vec![],
+            // TODO add ordering info to the ballista proto file
+            output_ordering: None,
             // TODO add configurations to the ballista proto file and construct the real ConfigOptions
             config_options: ConfigOptions::new().into_shareable(),
         })
