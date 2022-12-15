@@ -128,7 +128,7 @@ impl DistributedPlanner {
         } else if let Some(_sort_preserving_merge) = execution_plan
             .as_any()
             .downcast_ref::<SortPreservingMergeExec>(
-            ) {
+        ) {
             let shuffle_writer = create_shuffle_writer(
                 job_id,
                 self.next_stage_id(),
@@ -152,7 +152,7 @@ impl DistributedPlanner {
                 stages,
             ))
         } else if let Some(repart) =
-        execution_plan.as_any().downcast_ref::<RepartitionExec>()
+            execution_plan.as_any().downcast_ref::<RepartitionExec>()
         {
             match repart.output_partitioning() {
                 Partitioning::Hash(_, _) => {
@@ -182,7 +182,7 @@ impl DistributedPlanner {
                 }
             }
         } else if let Some(window) =
-        execution_plan.as_any().downcast_ref::<WindowAggExec>()
+            execution_plan.as_any().downcast_ref::<WindowAggExec>()
         {
             Err(BallistaError::NotImplemented(format!(
                 "WindowAggExec with window {:?}",
@@ -208,7 +208,7 @@ pub fn find_unresolved_shuffles(
     plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<UnresolvedShuffleExec>> {
     if let Some(unresolved_shuffle) =
-    plan.as_any().downcast_ref::<UnresolvedShuffleExec>()
+        plan.as_any().downcast_ref::<UnresolvedShuffleExec>()
     {
         Ok(vec![unresolved_shuffle.clone()])
     } else {
@@ -230,7 +230,7 @@ pub fn remove_unresolved_shuffles(
     let mut new_children: Vec<Arc<dyn ExecutionPlan>> = vec![];
     for child in stage.children() {
         if let Some(unresolved_shuffle) =
-        child.as_any().downcast_ref::<UnresolvedShuffleExec>()
+            child.as_any().downcast_ref::<UnresolvedShuffleExec>()
         {
             let mut relevant_locations = vec![];
             let p = partition_locations
@@ -323,7 +323,7 @@ mod test {
     use crate::test_utils::datafusion_test_context;
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
-    use ballista_core::serde::{protobuf, AsExecutionPlan, BallistaCodec};
+    use ballista_core::serde::BallistaCodec;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::joins::HashJoinExec;
@@ -335,8 +335,9 @@ mod test {
     use datafusion::prelude::SessionContext;
     use std::ops::Deref;
 
-    use ballista_core::serde::protobuf::PhysicalPlanNode;
+    use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf::LogicalPlanNode;
+    use datafusion_proto::protobuf::PhysicalPlanNode;
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -627,7 +628,7 @@ order by
         let stages = planner.plan_query_stages(&job_uuid.to_string(), plan)?;
 
         let partial_hash = stages[0].children()[0].clone();
-        let partial_hash_serde = roundtrip_operator(partial_hash.clone())?;
+        let partial_hash_serde = roundtrip_operator(&ctx, partial_hash.clone())?;
 
         let partial_hash = downcast_exec!(partial_hash, AggregateExec);
         let partial_hash_serde = downcast_exec!(partial_hash_serde, AggregateExec);
@@ -641,19 +642,19 @@ order by
     }
 
     fn roundtrip_operator(
+        ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
-        let ctx = SessionContext::new();
         let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
             BallistaCodec::default();
-        let proto: protobuf::PhysicalPlanNode =
-            protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let proto: datafusion_proto::protobuf::PhysicalPlanNode =
+            datafusion_proto::protobuf::PhysicalPlanNode::try_from_physical_plan(
                 plan.clone(),
                 codec.physical_extension_codec(),
             )?;
         let runtime = ctx.runtime_env();
         let result_exec_plan: Arc<dyn ExecutionPlan> = (proto).try_into_physical_plan(
-            &ctx,
+            ctx,
             runtime.deref(),
             codec.physical_extension_codec(),
         )?;

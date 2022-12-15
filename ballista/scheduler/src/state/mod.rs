@@ -35,10 +35,11 @@ use crate::config::{SchedulerConfig, SlotsPolicy};
 use crate::state::execution_graph::TaskDescription;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf::TaskStatus;
-use ballista_core::serde::{AsExecutionPlan, BallistaCodec};
+use ballista_core::serde::BallistaCodec;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
+use datafusion_proto::physical_plan::AsExecutionPlan;
 use log::{debug, error, info};
 use prost::Message;
 
@@ -467,7 +468,7 @@ mod test {
     };
     use ballista_core::error::Result;
     use ballista_core::serde::protobuf::{
-        task_status, PhysicalPlanNode, ShuffleWritePartition, SuccessfulTask, TaskStatus,
+        task_status, ShuffleWritePartition, SuccessfulTask, TaskStatus,
     };
     use ballista_core::serde::scheduler::{
         ExecutorData, ExecutorMetadata, ExecutorSpecification,
@@ -481,6 +482,7 @@ mod test {
     use datafusion::prelude::SessionContext;
     use datafusion::test_util::scan_empty;
     use datafusion_proto::protobuf::LogicalPlanNode;
+    use datafusion_proto::protobuf::PhysicalPlanNode;
     use std::sync::Arc;
 
     // We should free any reservations which are not assigned

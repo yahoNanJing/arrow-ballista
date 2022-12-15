@@ -22,13 +22,14 @@ use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::error::Result;
 use ballista_core::event_loop::{EventLoop, EventSender};
 use ballista_core::serde::protobuf::{StopExecutorParams, TaskStatus};
-use ballista_core::serde::{AsExecutionPlan, BallistaCodec};
+use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::default_session_builder;
 
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::logical_plan::AsLogicalPlan;
+use datafusion_proto::physical_plan::AsExecutionPlan;
 
 use crate::config::{SchedulerConfig, SlotsPolicy};
 use log::{error, warn};
@@ -310,6 +311,7 @@ mod test {
 
     use datafusion::test_util::scan_empty;
     use datafusion_proto::protobuf::LogicalPlanNode;
+    use datafusion_proto::protobuf::PhysicalPlanNode;
 
     use ballista_core::config::query::{
         BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
@@ -320,7 +322,7 @@ mod test {
     use crate::config::{SchedulerConfig, SlotsPolicy};
     use ballista_core::serde::protobuf::{
         failed_task, job_status, task_status, ExecutionError, FailedTask, JobStatus,
-        PhysicalPlanNode, ShuffleWritePartition, SuccessfulTask, TaskStatus,
+        ShuffleWritePartition, SuccessfulTask, TaskStatus,
     };
     use ballista_core::serde::scheduler::{
         ExecutorData, ExecutorMetadata, ExecutorSpecification,

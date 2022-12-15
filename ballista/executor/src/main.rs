@@ -36,7 +36,7 @@ use ballista_core::config::{LogRotationPolicy, TaskSchedulingPolicy};
 use ballista_core::error::BallistaError;
 use ballista_core::serde::protobuf::{
     executor_registration, scheduler_grpc_client::SchedulerGrpcClient,
-    ExecutorRegistration, ExecutorStoppedParams, PhysicalPlanNode,
+    ExecutorRegistration, ExecutorStoppedParams,
 };
 use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::serde::BallistaCodec;
@@ -53,6 +53,7 @@ use ballista_executor::terminate;
 use config::prelude::*;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_proto::protobuf::LogicalPlanNode;
+use datafusion_proto::protobuf::PhysicalPlanNode;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use tokio::sync::mpsc;

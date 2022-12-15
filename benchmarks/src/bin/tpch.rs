@@ -802,7 +802,8 @@ async fn get_table(
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
-                let format = ParquetFormat::default().with_enable_pruning(true);
+                let format = ParquetFormat::new(ctx.config_options())
+                    .with_enable_pruning(Some(true));
 
                 (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
             }
@@ -1520,10 +1521,11 @@ mod tests {
 
     mod ballista_round_trip {
         use super::*;
-        use ballista_core::serde::{protobuf, AsExecutionPlan, BallistaCodec};
+        use ballista_core::serde::BallistaCodec;
         use datafusion::datasource::listing::ListingTableUrl;
         use datafusion::physical_plan::ExecutionPlan;
         use datafusion_proto::logical_plan::AsLogicalPlan;
+        use datafusion_proto::physical_plan::AsExecutionPlan;
         use std::ops::Deref;
 
         async fn round_trip_query(n: usize) -> Result<()> {
@@ -1533,7 +1535,7 @@ mod tests {
             let ctx = SessionContext::with_config(config);
             let codec: BallistaCodec<
                 datafusion_proto::protobuf::LogicalPlanNode,
-                protobuf::PhysicalPlanNode,
+                datafusion_proto::protobuf::PhysicalPlanNode,
             > = BallistaCodec::default();
 
             // set tpch_data_path to dummy value and skip physical plan serde test when TPCH_DATA
@@ -1580,8 +1582,8 @@ mod tests {
                 // test physical plan roundtrip
                 if env::var("TPCH_DATA").is_ok() {
                     let physical_plan = ctx.create_physical_plan(&plan).await?;
-                    let proto: protobuf::PhysicalPlanNode =
-                        protobuf::PhysicalPlanNode::try_from_physical_plan(
+                    let proto: datafusion_proto::protobuf::PhysicalPlanNode =
+                        datafusion_proto::protobuf::PhysicalPlanNode::try_from_physical_plan(
                             physical_plan.clone(),
                             codec.physical_extension_codec(),
                         )

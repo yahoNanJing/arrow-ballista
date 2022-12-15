@@ -42,7 +42,8 @@ use ballista_core::serde::protobuf::{task_status, RunningTask};
 use ballista_core::serde::scheduler::{
     ExecutorMetadata, PartitionId, PartitionLocation, PartitionStats,
 };
-use ballista_core::serde::{AsExecutionPlan, BallistaCodec};
+use ballista_core::serde::BallistaCodec;
+use datafusion_proto::physical_plan::AsExecutionPlan;
 
 use crate::display::print_stage_metrics;
 use crate::planner::DistributedPlanner;

@@ -139,8 +139,8 @@ impl BallistaContext {
         config: &BallistaConfig,
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
-        use ballista_core::serde::protobuf::PhysicalPlanNode;
         use ballista_core::serde::BallistaCodec;
+        use datafusion_proto::protobuf::PhysicalPlanNode;
 
         log::info!("Running in local mode. Scheduler will be run in-proc");
 
@@ -375,7 +375,7 @@ impl BallistaContext {
                 ref if_not_exists,
                 ..
             }) => {
-                let table_exists = ctx.table_exist(name.as_str())?;
+                let table_exists = ctx.table_exist(name.as_table_reference())?;
                 let schema: SchemaRef = Arc::new(schema.as_ref().to_owned().into());
                 let table_partition_cols = table_partition_cols
                     .iter()
@@ -397,12 +397,17 @@ impl BallistaContext {
                             if !schema.fields().is_empty() {
                                 options = options.schema(&schema);
                             }
-                            self.register_csv(name, location, options).await?;
+                            self.register_csv(
+                                name.as_table_reference().table(),
+                                location,
+                                options,
+                            )
+                            .await?;
                             Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
                         }
                         "parquet" => {
                             self.register_parquet(
-                                name,
+                                name.as_table_reference().table(),
                                 location,
                                 ParquetReadOptions::default()
                                     .table_partition_cols(table_partition_cols),
@@ -412,7 +417,7 @@ impl BallistaContext {
                         }
                         "avro" => {
                             self.register_avro(
-                                name,
+                                name.as_table_reference().table(),
                                 location,
                                 AvroReadOptions::default()
                                     .table_partition_cols(table_partition_cols),
@@ -430,7 +435,7 @@ impl BallistaContext {
                     }
                     (false, true) => Err(DataFusionError::Execution(format!(
                         "Table '{:?}' already exists",
-                        name
+                        name.as_table_reference().table()
                     ))),
                 }
             }

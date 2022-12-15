@@ -20,9 +20,9 @@ use crate::scheduler_server::externalscaler::{
     GetMetricsResponse, IsActiveResponse, MetricSpec, MetricValue, ScaledObjectRef,
 };
 use crate::scheduler_server::SchedulerServer;
-use ballista_core::serde::AsExecutionPlan;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 
+use datafusion_proto::physical_plan::AsExecutionPlan;
 use tonic::{Request, Response};
 
 const INFLIGHT_TASKS_METRIC_NAME: &str = "inflight_tasks";
