@@ -15,22 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "ballista-cli",
-    "ballista/cache",
-    "ballista/client",
-    "ballista/core",
-    "ballista/executor",
-    "ballista/scheduler",
-    "benchmarks",
-    "examples",
-]
-exclude = ["dependencies/arrow-datafusion"]
+[package]
+name = "ballista-cache"
+version = "0.11.0"
+edition = "2021"
 
-# cargo build --profile release-lto
-[profile.release-lto]
-codegen-units = 1
-inherits = "release"
-lto = true
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[dependencies]
+async-trait = "0.1.64"
+futures = "0.3"
+hashbrown = "0.13"
+log = "0.4"
+parking_lot = "0.12"
+tokio = { version = "1.25", features = ["macros", "parking_lot", "rt-multi-thread", "sync", "time"] }
