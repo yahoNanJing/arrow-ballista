@@ -15,22 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc = include_str!("../README.md")]
-pub const BALLISTA_VERSION: &str = env!("CARGO_PKG_VERSION");
+use object_store::path::Path;
+use object_store::ObjectStore;
+use std::any::Any;
+use std::fmt::{Debug, Display};
+use std::sync::Arc;
 
-pub fn print_version() {
-    println!("Ballista version: {BALLISTA_VERSION}")
+pub mod local_disk;
+pub mod local_memory;
+
+pub trait CacheMedium: Debug + Send + Sync + Display + 'static {
+    /// Returns the cache layer policy as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Get the ObjectStore for the cache storage
+    fn get_object_store(&self) -> Arc<dyn ObjectStore>;
+
+    /// Get the mapping location on the cache ObjectStore for the source location on the source ObjectStore
+    fn get_mapping_location(
+        &self,
+        source_location: &Path,
+        source_object_store: Arc<dyn ObjectStore>,
+    ) -> Path;
 }
-
-pub mod cache_layer;
-pub mod client;
-pub mod config;
-pub mod error;
-pub mod event_loop;
-pub mod execution_plans;
-/// some plugins
-pub mod plugin;
-pub mod utils;
-
-#[macro_use]
-pub mod serde;
