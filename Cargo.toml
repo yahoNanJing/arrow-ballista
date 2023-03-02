@@ -25,7 +25,7 @@ members = [
     "benchmarks",
     "examples",
 ]
-exclude = ["python"]
+exclude = ["dependencies/arrow-datafusion"]
 
 # cargo build --profile release-lto
 [profile.release-lto]
