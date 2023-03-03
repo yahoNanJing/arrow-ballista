@@ -74,6 +74,8 @@ async fn main() -> Result<()> {
         log_dir: opt.log_dir,
         log_file_name_prefix,
         log_rotation_policy: opt.log_rotation_policy,
+        log_clean_up_interval_seconds: opt.log_clean_up_interval_seconds,
+        log_clean_up_ttl: opt.log_clean_up_ttl,
         print_thread_info: opt.print_thread_info,
         job_data_ttl_seconds: opt.job_data_ttl_seconds,
         job_data_clean_up_interval_seconds: opt.job_data_clean_up_interval_seconds,

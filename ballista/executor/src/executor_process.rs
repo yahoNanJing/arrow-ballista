@@ -81,6 +81,8 @@ pub struct ExecutorProcessConfig {
     pub print_thread_info: bool,
     pub log_file_name_prefix: String,
     pub log_rotation_policy: LogRotationPolicy,
+    pub log_clean_up_interval_seconds: u64,
+    pub log_clean_up_ttl: u64,
     pub job_data_ttl_seconds: u64,
     pub job_data_clean_up_interval_seconds: u64,
     /// Optional execution engine to use to execute physical plans, will default to
@@ -92,7 +94,7 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
     let rust_log = env::var(EnvFilter::DEFAULT_ENV);
     let log_filter = EnvFilter::new(rust_log.unwrap_or(opt.special_mod_log_level));
     // File layer
-    if let Some(log_dir) = opt.log_dir {
+    if let Some(log_dir) = &opt.log_dir {
         let log_file = match opt.log_rotation_policy {
             LogRotationPolicy::Minutely => {
                 tracing_appender::rolling::minutely(log_dir, &opt.log_file_name_prefix)
@@ -114,6 +116,13 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
             .with_writer(log_file)
             .with_env_filter(log_filter)
             .init();
+        if opt.log_clean_up_interval_seconds > 0 {
+            ballista_core::utils::clean_up_log_loop(
+                log_dir.to_string(),
+                opt.log_clean_up_interval_seconds,
+                opt.log_clean_up_ttl,
+            );
+        }
     } else {
         // Console layer
         tracing_subscriber::fmt()
