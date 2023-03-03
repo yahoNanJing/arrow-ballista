@@ -59,7 +59,7 @@ hashbrown = "0.13"
 itertools = "0.10"
 libloading = "0.7.3"
 log = "0.4"
-object_store = "0.5.2"
+object_store = "0.5.4"
 once_cell = "1.9.0"
 
 parking_lot = "0.12"
@@ -68,7 +68,7 @@ prost = "0.11"
 prost-types = "0.11"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
-sqlparser = "0.30.0"
+sqlparser = "0.32"
 sys-info = "0.9.0"
 tokio = "1.0"
 tokio-stream = { version = "0.1", features = ["net"] }

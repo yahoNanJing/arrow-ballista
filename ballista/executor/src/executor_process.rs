@@ -51,7 +51,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::{
-    create_grpc_client_connection, create_grpc_server, with_object_store_provider,
+    create_grpc_client_connection, create_grpc_server, with_object_store_registry,
 };
 use ballista_core::BALLISTA_VERSION;
 
@@ -170,7 +170,7 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         }),
     };
 
-    let config = with_object_store_provider(
+    let config = with_object_store_registry(
         RuntimeConfig::new().with_temp_file_path(work_dir.clone()),
     );
     let runtime = Arc::new(RuntimeEnv::new(config).map_err(|_| {

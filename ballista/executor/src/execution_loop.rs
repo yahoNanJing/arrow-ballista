@@ -29,6 +29,7 @@ use crate::{as_task_status, TaskExecutionTimes};
 use ballista_core::error::BallistaError;
 use ballista_core::serde::scheduler::{ExecutorSpecification, PartitionId};
 use ballista_core::serde::BallistaCodec;
+use datafusion::config::Extensions;
 use datafusion::execution::context::TaskContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::from_proto::parse_protobuf_hash_partitioning;
@@ -184,14 +185,15 @@ async fn run_received_task<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
     }
     let runtime = executor.runtime.clone();
     let session_id = task.session_id.clone();
-    let task_context = Arc::new(TaskContext::new(
+    let task_context = Arc::new(TaskContext::try_new(
         task_identity.clone(),
         session_id,
         task_props,
         task_scalar_functions,
         task_aggregate_functions,
         runtime.clone(),
-    ));
+        Extensions::new(),
+    )?);
 
     let plan: Arc<dyn ExecutionPlan> =
         U::try_decode(task.plan.as_slice()).and_then(|proto| {

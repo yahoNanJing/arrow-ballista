@@ -24,7 +24,9 @@ use crate::serde::scheduler::PartitionStats;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::{ipc::writer::FileWriter, record_batch::RecordBatch};
-use datafusion::datasource::object_store::{ObjectStoreProvider, ObjectStoreRegistry};
+use datafusion::datasource::object_store::{
+    DefaultObjectStoreRegistry, ObjectStoreRegistry,
+};
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     QueryPlanner, SessionConfig, SessionContext, SessionState,
@@ -70,27 +72,33 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
     SessionState::with_config_rt(
         config,
         Arc::new(
-            RuntimeEnv::new(with_object_store_provider(RuntimeConfig::default()))
+            RuntimeEnv::new(with_object_store_registry(RuntimeConfig::default()))
                 .unwrap(),
         ),
     )
 }
 
-/// Get a RuntimeConfig with specific ObjectStoreDetector in the ObjectStoreRegistry
-pub fn with_object_store_provider(config: RuntimeConfig) -> RuntimeConfig {
-    config.with_object_store_registry(Arc::new(ObjectStoreRegistry::new_with_provider(
-        Some(Arc::new(FeatureBasedObjectStoreProvider)),
-    )))
+/// Get a RuntimeConfig with specific ObjectStoreRegistry
+pub fn with_object_store_registry(config: RuntimeConfig) -> RuntimeConfig {
+    config
+        .with_object_store_registry(Arc::new(FeatureBasedObjectStoreRegistry::default()))
 }
 
-/// An object store detector based on which features are enable for different kinds of object stores
-pub struct FeatureBasedObjectStoreProvider;
+/// The inner [`DefaultObjectStoreRegistry`] can be used as cache for the existing registration.
+/// When fail to find the object store in the cache, it will try to invoke [`get_feature_store`] to
+/// find a suitable [`ObjectStore`] for the url.
+#[derive(Debug, Default)]
+pub struct FeatureBasedObjectStoreRegistry {
+    inner: DefaultObjectStoreRegistry,
+}
 
-impl ObjectStoreProvider for FeatureBasedObjectStoreProvider {
-    /// Detector a suitable object store based on its url if possible
-    /// Return the key and object store
+impl FeatureBasedObjectStoreRegistry {
+    /// Find a suitable object store based on its url and enabled features if possible
     #[allow(unused_variables)]
-    fn get_by_url(&self, url: &Url) -> datafusion::error::Result<Arc<dyn ObjectStore>> {
+    fn get_feature_store(
+        &self,
+        url: &Url,
+    ) -> datafusion::error::Result<Arc<dyn ObjectStore>> {
         #[cfg(any(feature = "hdfs", feature = "hdfs3"))]
         {
             let store = HadoopFileSystem::new(url.as_str());
@@ -108,9 +116,9 @@ impl ObjectStoreProvider for FeatureBasedObjectStoreProvider {
                         .build()?;
                     return Ok(Arc::new(store));
                 }
-            // Support Alibaba Cloud OSS
-            // Use S3 compatibility mode to access Alibaba Cloud OSS
-            // The `AWS_ENDPOINT` should have bucket name included
+                // Support Alibaba Cloud OSS
+                // Use S3 compatibility mode to access Alibaba Cloud OSS
+                // The `AWS_ENDPOINT` should have bucket name included
             } else if url.as_str().starts_with("oss://") {
                 if let Some(bucket_name) = url.host_str() {
                     let store = AmazonS3Builder::from_env()
@@ -137,6 +145,26 @@ impl ObjectStoreProvider for FeatureBasedObjectStoreProvider {
         Err(DataFusionError::Execution(format!(
             "No object store available for {url}"
         )))
+    }
+}
+
+impl ObjectStoreRegistry for FeatureBasedObjectStoreRegistry {
+    fn register_store(
+        &self,
+        url: &Url,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.inner.register_store(url, store)
+    }
+
+    fn get_store(&self, url: &Url) -> datafusion::error::Result<Arc<dyn ObjectStore>> {
+        self.inner.get_store(url).or_else(|_| {
+            let store = self.get_feature_store(url)?;
+
+            self.inner.register_store(url, store.clone());
+
+            Ok(store)
+        })
     }
 }
 
@@ -319,7 +347,7 @@ pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
     let mut session_state = SessionState::with_config_rt(
         session_config,
         Arc::new(
-            RuntimeEnv::new(with_object_store_provider(RuntimeConfig::default()))
+            RuntimeEnv::new(with_object_store_registry(RuntimeConfig::default()))
                 .unwrap(),
         ),
     )

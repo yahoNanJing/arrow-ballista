@@ -57,6 +57,7 @@ use crate::cpu_bound_executor::DedicatedExecutor;
 use crate::executor::Executor;
 use crate::shutdown::ShutdownNotifier;
 use crate::{as_task_status, TaskExecutionTimes};
+use datafusion::config::Extensions;
 
 type ServerHandle = JoinHandle<Result<(), BallistaError>>;
 type SchedulerClients = Arc<DashMap<String, SchedulerGrpcClient<Channel>>>;
@@ -319,14 +320,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
 
         let session_id = task.session_id;
         let runtime = self.executor.runtime.clone();
-        let task_context = Arc::new(TaskContext::new(
+        let task_context = Arc::new(TaskContext::try_new(
             task_identity.clone(),
             session_id,
             task_props,
             task_scalar_functions,
             task_aggregate_functions,
             runtime.clone(),
-        ));
+            Extensions::new(),
+        )?);
 
         let encoded_plan = &task.plan.as_slice();
 

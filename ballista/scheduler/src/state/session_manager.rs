@@ -84,22 +84,22 @@ fn propagate_ballista_configs(
     for (k, v) in ballista_config.settings() {
         // see https://arrow.apache.org/datafusion/user-guide/configs.html for explanation of these configs
         match k.as_str() {
-            "datafusion.optimizer.filter_null_join_keys" => {
-                config = config.set(
-                    k,
-                    ScalarValue::Boolean(Some(v.parse::<bool>().unwrap_or(false))),
-                )
-            }
             "datafusion.execution.coalesce_batches" => {
                 config = config.set(
                     k,
                     ScalarValue::Boolean(Some(v.parse::<bool>().unwrap_or(true))),
                 )
             }
-            "datafusion.execution.coalesce_target_batch_size" => {
+            "datafusion.execution.collect_statistics" => {
                 config = config.set(
                     k,
-                    ScalarValue::UInt64(Some(v.parse::<u64>().unwrap_or(4096))),
+                    ScalarValue::Boolean(Some(v.parse::<bool>().unwrap_or(false))),
+                )
+            }
+            "datafusion.optimizer.filter_null_join_keys" => {
+                config = config.set(
+                    k,
+                    ScalarValue::Boolean(Some(v.parse::<bool>().unwrap_or(false))),
                 )
             }
             "datafusion.optimizer.skip_failed_rules" => {
@@ -113,5 +113,9 @@ fn propagate_ballista_configs(
             }
         }
     }
-    config
+    // We don't need the round robin repartition optimizer rule for distributed engine
+    config.set(
+        "datafusion.optimizer.enable_round_robin_repartition",
+        ScalarValue::Boolean(Some(false)),
+    )
 }
