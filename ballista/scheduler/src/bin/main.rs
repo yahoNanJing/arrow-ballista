@@ -56,7 +56,6 @@ async fn main() -> Result<()> {
     }
 
     let special_mod_log_level = opt.log_level_setting;
-    let log_dir = opt.log_dir;
     let print_thread_info = opt.print_thread_info;
 
     let log_file_name_prefix = format!(
@@ -67,7 +66,7 @@ async fn main() -> Result<()> {
     let rust_log = env::var(EnvFilter::DEFAULT_ENV);
     let log_filter = EnvFilter::new(rust_log.unwrap_or(special_mod_log_level));
     // File layer
-    if let Some(log_dir) = log_dir {
+    if let Some(log_dir) = &opt.log_dir {
         let log_file = match opt.log_rotation_policy {
             LogRotationPolicy::Minutely => {
                 tracing_appender::rolling::minutely(log_dir, &log_file_name_prefix)
@@ -89,6 +88,13 @@ async fn main() -> Result<()> {
             .with_writer(log_file)
             .with_env_filter(log_filter)
             .init();
+        if opt.log_clean_up_interval_seconds > 0 {
+            ballista_core::utils::clean_up_log_loop(
+                log_dir.to_string(),
+                opt.log_clean_up_interval_seconds,
+                opt.log_clean_up_ttl,
+            );
+        }
     } else {
         // Console layer
         tracing_subscriber::fmt()
