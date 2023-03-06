@@ -188,7 +188,7 @@ impl ClusterState for InMemoryClusterState {
 
             let reservations = (0..slots)
                 .into_iter()
-                .map(|_| ExecutorReservation::new_free(metadata.id.clone()))
+                .map(|_| ExecutorReservation::new(metadata.id.clone()))
                 .collect();
 
             self.executors.insert(metadata.id.clone(), metadata.clone());

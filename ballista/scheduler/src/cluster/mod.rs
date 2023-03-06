@@ -390,8 +390,7 @@ pub(crate) fn reserve_slots_bias(
         if let Some(executor) = iter.next() {
             let take = executor.slots.min(n);
             for _ in 0..take {
-                reservations
-                    .push(ExecutorReservation::new_free(executor.executor_id.clone()));
+                reservations.push(ExecutorReservation::new(executor.executor_id.clone()));
             }
 
             executor.slots -= take;
@@ -425,7 +424,7 @@ pub(crate) fn reserve_slots_round_robin(
                 break;
             }
 
-            reservations.push(ExecutorReservation::new_free(data.executor_id.clone()));
+            reservations.push(ExecutorReservation::new(data.executor_id.clone()));
             data.slots -= 1;
             n -= 1;
 
