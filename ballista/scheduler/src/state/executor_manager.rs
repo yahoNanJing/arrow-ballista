@@ -45,37 +45,14 @@ type ExecutorClients = Arc<DashMap<String, ExecutorGrpcClient<Channel>>>;
 
 /// Represents a task slot that is reserved (i.e. available for scheduling but not visible to the
 /// rest of the system).
-/// When tasks finish we want to preferentially assign new tasks from the same job, so the reservation
-/// can already be assigned to a particular job ID. In that case, the scheduler will try to schedule
-/// available tasks for that job to the reserved task slot.
 #[derive(Clone, Debug)]
 pub struct ExecutorReservation {
     pub executor_id: String,
-    pub job_id: Option<String>,
 }
 
 impl ExecutorReservation {
-    pub fn new_free(executor_id: String) -> Self {
-        Self {
-            executor_id,
-            job_id: None,
-        }
-    }
-
-    pub fn new_assigned(executor_id: String, job_id: String) -> Self {
-        Self {
-            executor_id,
-            job_id: Some(job_id),
-        }
-    }
-
-    pub fn assign(mut self, job_id: String) -> Self {
-        self.job_id = Some(job_id);
-        self
-    }
-
-    pub fn assigned(&self) -> bool {
-        self.job_id.is_some()
+    pub fn new(executor_id: String) -> Self {
+        Self { executor_id }
     }
 }
 
@@ -234,8 +211,7 @@ impl ExecutorManager {
                     break;
                 }
 
-                reservations
-                    .push(ExecutorReservation::new_free(data.executor_id.clone()));
+                reservations.push(ExecutorReservation::new(data.executor_id.clone()));
                 data.available_task_slots -= 1;
                 n -= 1;
 
@@ -507,7 +483,7 @@ impl ExecutorManager {
             let num_slots = specification.available_task_slots as usize;
             let mut reservations: Vec<ExecutorReservation> = vec![];
             for _ in 0..num_slots {
-                reservations.push(ExecutorReservation::new_free(metadata.id.clone()));
+                reservations.push(ExecutorReservation::new(metadata.id.clone()));
             }
 
             specification.available_task_slots = 0;

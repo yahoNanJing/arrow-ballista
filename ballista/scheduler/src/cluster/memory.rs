@@ -187,7 +187,7 @@ impl ClusterState for InMemoryClusterState {
             let slots = std::mem::take(&mut spec.available_task_slots) as usize;
 
             let reservations = (0..slots)
-                .map(|_| ExecutorReservation::new_free(metadata.id.clone()))
+                .map(|_| ExecutorReservation::new(metadata.id.clone()))
                 .collect();
 
             self.executors.insert(metadata.id.clone(), metadata.clone());
