@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache_layer::object_store::file::FileCacheObjectStore;
+use crate::cache_layer::CacheLayer;
 use crate::config::BallistaConfig;
 use crate::error::{BallistaError, Result};
 use crate::execution_plans::{
@@ -24,7 +26,10 @@ use crate::serde::scheduler::PartitionStats;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::{ipc::writer::FileWriter, record_batch::RecordBatch};
-use datafusion::datasource::object_store::{ObjectStoreProvider, ObjectStoreRegistry};
+use datafusion::datasource::object_store::{
+    DefaultObjectStoreManager, ObjectStoreManager, ObjectStoreManagerWithProvider,
+    ObjectStoreProvider, ObjectStoreRegistry,
+};
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     QueryPlanner, SessionConfig, SessionContext, SessionState,
@@ -84,6 +89,27 @@ pub fn with_object_store_provider(config: RuntimeConfig) -> RuntimeConfig {
     )))
 }
 
+pub fn with_object_store_manager(
+    config: RuntimeConfig,
+    cache_layer: Option<CacheLayer>,
+) -> RuntimeConfig {
+    let default_manager = Arc::new(ObjectStoreManagerWithProvider::new(
+        Arc::new(DefaultObjectStoreManager::new()),
+        Arc::new(FeatureBasedObjectStoreProvider),
+    ));
+    let manager: Arc<dyn ObjectStoreManager> = if let Some(cache_layer) = cache_layer {
+        Arc::new(CacheBasedObjectStoreManager::new(
+            default_manager,
+            cache_layer,
+        ))
+    } else {
+        default_manager
+    };
+    config.with_object_store_registry(Arc::new(ObjectStoreRegistry::new_with_manager(
+        manager,
+    )))
+}
+
 /// An object store detector based on which features are enable for different kinds of object stores
 pub struct FeatureBasedObjectStoreProvider;
 
@@ -138,6 +164,44 @@ impl ObjectStoreProvider for FeatureBasedObjectStoreProvider {
         Err(DataFusionError::Execution(format!(
             "No object store available for {url}"
         )))
+    }
+}
+
+/// An object store manager wrapped an existing manager with a cache layer.
+///
+/// All of the object store get by url will be wrapped with a cache object store.
+#[derive(Debug)]
+pub struct CacheBasedObjectStoreManager {
+    inner: Arc<dyn ObjectStoreManager>,
+    cache_layer: CacheLayer,
+}
+
+impl CacheBasedObjectStoreManager {
+    pub fn new(inner: Arc<dyn ObjectStoreManager>, cache_layer: CacheLayer) -> Self {
+        Self { inner, cache_layer }
+    }
+}
+
+impl ObjectStoreManager for CacheBasedObjectStoreManager {
+    fn register_store(
+        &self,
+        scheme: &str,
+        host: &str,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.inner.register_store(scheme, host, store)
+    }
+
+    fn get_by_url(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
+        let source_object_store = self.inner.get_by_url(url)?;
+        match &self.cache_layer {
+            CacheLayer::LocalDiskFile(cache_layer) => Ok(Arc::new(
+                FileCacheObjectStore::new(cache_layer.clone(), source_object_store),
+            )),
+            CacheLayer::LocalMemoryFile(cache_layer) => Ok(Arc::new(
+                FileCacheObjectStore::new(cache_layer.clone(), source_object_store),
+            )),
+        }
     }
 }
 
