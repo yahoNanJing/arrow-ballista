@@ -335,20 +335,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
     /// 3. The number of pending tasks across active jobs
     pub async fn fill_reservations(
         &self,
-        reservations: &[ExecutorReservation],
+        free_reservations: &[ExecutorReservation],
     ) -> Result<(
         Vec<(String, TaskDescription)>,
         Vec<ExecutorReservation>,
         usize,
     )> {
-        // Reinitialize the free reservations.
-        let free_reservations: Vec<ExecutorReservation> = reservations
-            .iter()
-            .map(|reservation| {
-                ExecutorReservation::new_free(reservation.executor_id.clone())
-            })
-            .collect();
-
         let mut assignments: Vec<(String, TaskDescription)> = vec![];
         let mut pending_tasks = 0usize;
         let mut assign_tasks = 0usize;

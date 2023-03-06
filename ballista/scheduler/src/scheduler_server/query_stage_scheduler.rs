@@ -165,10 +165,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         .state
                         .executor_manager
                         .reserve_slots(available_tasks as u32)
-                        .await?
-                        .into_iter()
-                        .map(|res| res.assign(job_id.clone()))
-                        .collect();
+                        .await?;
 
                     if reservations.is_empty() && self.job_resubmit_interval_ms.is_some()
                     {

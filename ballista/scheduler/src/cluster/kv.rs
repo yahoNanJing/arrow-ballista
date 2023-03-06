@@ -299,7 +299,7 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             let num_slots = spec.available_task_slots as usize;
             let mut reservations: Vec<ExecutorReservation> = vec![];
             for _ in 0..num_slots {
-                reservations.push(ExecutorReservation::new_free(executor_id.clone()));
+                reservations.push(ExecutorReservation::new(executor_id.clone()));
             }
 
             let available_slots = AvailableTaskSlots {
