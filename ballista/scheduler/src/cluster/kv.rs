@@ -17,8 +17,8 @@
 
 use crate::cluster::storage::{KeyValueStore, Keyspace, Lock, Operation, WatchEvent};
 use crate::cluster::{
-    reserve_slots_bias, reserve_slots_round_robin, ClusterState, ExecutorHeartbeatStream,
-    JobState, JobStateEvent, JobStateEventStream, JobStatus, TaskDistribution,
+    ClusterState, ExecutorHeartbeatStream, JobState, JobStateEvent, JobStateEventStream,
+    JobStatus,
 };
 use crate::scheduler_server::SessionBuilder;
 use crate::state::execution_graph::ExecutionGraph;
@@ -91,105 +91,6 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     ClusterState for KeyValueState<S, T, U>
 {
-    async fn reserve_slots(
-        &self,
-        num_slots: u32,
-        distribution: TaskDistribution,
-        executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ReservedTaskSlots>> {
-        let lock = self.store.lock(Keyspace::Slots, "global").await?;
-
-        with_lock(lock, async {
-            let resources = self.store.get(Keyspace::Slots, "all").await?;
-
-            let mut slots =
-                ExecutorTaskSlots::decode(resources.as_slice()).map_err(|err| {
-                    BallistaError::Internal(format!(
-                        "Unexpected value in executor slots state: {err:?}"
-                    ))
-                })?;
-
-            let available_slots: Vec<&mut AvailableTaskSlots> = slots
-                .task_slots
-                .iter_mut()
-                .filter_map(|data| {
-                    (data.slots > 0
-                        && executors
-                            .as_ref()
-                            .map(|executors| executors.contains(&data.executor_id))
-                            .unwrap_or(true))
-                    .then_some(data)
-                })
-                .collect();
-
-            let reservations = match distribution {
-                TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
-                TaskDistribution::RoundRobin => {
-                    reserve_slots_round_robin(available_slots, num_slots)
-                }
-            };
-
-            if !reservations.is_empty() {
-                self.store
-                    .put(Keyspace::Slots, "all".to_owned(), slots.encode_to_vec())
-                    .await?
-            }
-
-            Ok(reservations)
-        })
-        .await
-    }
-
-    async fn reserve_slots_exact(
-        &self,
-        num_slots: u32,
-        distribution: TaskDistribution,
-        executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ReservedTaskSlots>> {
-        let lock = self.store.lock(Keyspace::Slots, "global").await?;
-
-        with_lock(lock, async {
-            let resources = self.store.get(Keyspace::Slots, "all").await?;
-
-            let mut slots =
-                ExecutorTaskSlots::decode(resources.as_slice()).map_err(|err| {
-                    BallistaError::Internal(format!(
-                        "Unexpected value in executor slots state: {err:?}"
-                    ))
-                })?;
-
-            let available_slots: Vec<&mut AvailableTaskSlots> = slots
-                .task_slots
-                .iter_mut()
-                .filter_map(|data| {
-                    (data.slots > 0
-                        && executors
-                            .as_ref()
-                            .map(|executors| executors.contains(&data.executor_id))
-                            .unwrap_or(true))
-                    .then_some(data)
-                })
-                .collect();
-
-            let reservations = match distribution {
-                TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
-                TaskDistribution::RoundRobin => {
-                    reserve_slots_round_robin(available_slots, num_slots)
-                }
-            };
-
-            if reservations.len() == num_slots as usize {
-                self.store
-                    .put(Keyspace::Slots, "all".to_owned(), slots.encode_to_vec())
-                    .await?;
-                Ok(reservations)
-            } else {
-                Ok(vec![])
-            }
-        })
-        .await
-    }
-
     async fn cancel_reservations(
         &self,
         reservations: Vec<ReservedTaskSlots>,

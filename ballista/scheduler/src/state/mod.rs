@@ -25,15 +25,18 @@ use std::time::Instant;
 
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 
-use crate::state::executor_manager::{ExecutorManager, ReservedTaskSlots};
+use crate::state::executor_manager::{
+    total_task_slots, ExecutorManager, ReservedTaskSlots,
+};
 use crate::state::session_manager::SessionManager;
 use crate::state::task_manager::{TaskLauncher, TaskManager};
 
 use crate::cluster::BallistaCluster;
-use crate::config::SchedulerConfig;
+use crate::config::{SchedulerConfig, SlotsPolicy};
 use crate::state::execution_graph::TaskDescription;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf::TaskStatus;
+use ballista_core::serde::scheduler::ExecutorData;
 use ballista_core::serde::BallistaCodec;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -158,6 +161,182 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         self.executor_manager.init().await
     }
 
+    /// Return the pending task number
+    pub(crate) async fn revive_offers(&self) -> Result<usize> {
+        let (schedulable_tasks, pending_tasks) = self.fetch_schedulable_tasks().await?;
+
+        let returned_task_slots =
+            self.launch_schedulable_tasks(schedulable_tasks).await?;
+
+        if total_task_slots(returned_task_slots.as_slice()) > 0 {
+            self.executor_manager
+                .cancel_reservations(returned_task_slots)
+                .await?;
+        }
+
+        Ok(pending_tasks)
+    }
+
+    async fn fetch_schedulable_tasks(
+        &self,
+    ) -> Result<(Vec<(String, TaskDescription)>, usize)> {
+        if self.executor_manager.slots_policy.is_local() {
+            self.fetch_schedulable_tasks_local().await
+        } else {
+            self.fetch_schedulable_tasks_cluster().await
+        }
+    }
+
+    async fn fetch_schedulable_tasks_cluster(
+        &self,
+    ) -> Result<(Vec<(String, TaskDescription)>, usize)> {
+        Ok((vec![], 0))
+    }
+
+    async fn fetch_schedulable_tasks_local(
+        &self,
+    ) -> Result<(Vec<(String, TaskDescription)>, usize)> {
+        match self.executor_manager.slots_policy {
+            SlotsPolicy::RoundRobinLocal => {
+                self.fetch_schedulable_tasks_local_round_robin().await
+            }
+            _ => Err(BallistaError::General(format!(
+                "Reservation policy {:?} is not supported",
+                self.executor_manager.slots_policy
+            ))),
+        }
+    }
+
+    async fn fetch_schedulable_tasks_local_round_robin(
+        &self,
+    ) -> Result<(Vec<(String, TaskDescription)>, usize)> {
+        let alive_executors = self
+            .executor_manager
+            .get_alive_executors_within_one_minute();
+        let mut available_executor_data = self
+            .executor_manager
+            .executor_data
+            .iter_mut()
+            .filter_map(|data| {
+                (data.available_task_slots > 0
+                    && alive_executors.contains(&data.executor_id))
+                .then_some(data)
+            })
+            .collect::<Vec<_>>();
+        available_executor_data
+            .sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
+
+        let mut schedulable_tasks: Vec<(String, TaskDescription)> = vec![];
+        let mut pending_tasks = 0usize;
+        let mut offset = 0usize;
+        for pairs in self.task_manager.active_job_cache.iter() {
+            let (_job_id, job_info) = pairs.pair();
+            let mut graph = job_info.execution_graph.write().await;
+            for executor_data in available_executor_data.iter_mut().skip(offset) {
+                while executor_data.available_task_slots > 0 {
+                    if let Some(task) = graph.pop_next_task(&executor_data.executor_id)? {
+                        schedulable_tasks.push((executor_data.executor_id.clone(), task));
+                        executor_data.available_task_slots -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                if executor_data.available_task_slots == 0 {
+                    offset += 1;
+                } else {
+                    break;
+                }
+            }
+            if offset >= available_executor_data.len() {
+                pending_tasks += graph.available_tasks();
+                break;
+            }
+        }
+
+        Ok((schedulable_tasks, pending_tasks))
+    }
+
+    async fn launch_schedulable_tasks(
+        &self,
+        schedulable_tasks: Vec<(String, TaskDescription)>,
+    ) -> Result<Vec<ReservedTaskSlots>> {
+        // Put tasks to the same executor together
+        // And put tasks belonging to the same stage together for creating MultiTaskDefinition
+        let mut executor_stage_assignments: HashMap<
+            String,
+            HashMap<(String, usize), Vec<TaskDescription>>,
+        > = HashMap::new();
+        for (executor_id, task) in schedulable_tasks.into_iter() {
+            let stage_key = (task.partition.job_id.clone(), task.partition.stage_id);
+            if let Some(tasks) = executor_stage_assignments.get_mut(&executor_id) {
+                if let Some(executor_stage_tasks) = tasks.get_mut(&stage_key) {
+                    executor_stage_tasks.push(task);
+                } else {
+                    tasks.insert(stage_key, vec![task]);
+                }
+            } else {
+                let mut executor_stage_tasks: HashMap<
+                    (String, usize),
+                    Vec<TaskDescription>,
+                > = HashMap::new();
+                executor_stage_tasks.insert(stage_key, vec![task]);
+                executor_stage_assignments.insert(executor_id, executor_stage_tasks);
+            }
+        }
+
+        let mut join_handles = vec![];
+        for (executor_id, tasks) in executor_stage_assignments.into_iter() {
+            let tasks: Vec<Vec<TaskDescription>> = tasks.into_values().collect();
+            // Total number of tasks to be launched for one executor
+            let n_tasks: usize = tasks.iter().map(|stage_tasks| stage_tasks.len()).sum();
+
+            let task_manager = self.task_manager.clone();
+            let executor_manager = self.executor_manager.clone();
+            let join_handle = tokio::spawn(async move {
+                let success = match executor_manager
+                    .get_executor_metadata(&executor_id)
+                    .await
+                {
+                    Ok(executor) => {
+                        if let Err(e) = task_manager
+                            .launch_multi_task(&executor, tasks, &executor_manager)
+                            .await
+                        {
+                            error!("Failed to launch new task: {:?}", e);
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to launch new task, could not get executor metadata: {:?}", e);
+                        false
+                    }
+                };
+                if success {
+                    vec![]
+                } else {
+                    vec![ReservedTaskSlots::new_with_n(executor_id.clone(), n_tasks)]
+                }
+            });
+            join_handles.push(join_handle);
+        }
+
+        let unassigned_executor_reservations =
+            futures::future::join_all(join_handles)
+                .await
+                .into_iter()
+                .collect::<std::result::Result<
+                    Vec<Vec<ReservedTaskSlots>>,
+                    tokio::task::JoinError,
+                >>()?;
+
+        Ok(unassigned_executor_reservations
+            .into_iter()
+            .flatten()
+            .collect::<Vec<ReservedTaskSlots>>())
+    }
+
     pub(crate) async fn update_task_statuses(
         &self,
         executor_id: &str,
@@ -177,137 +356,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             .await?;
 
         Ok((events, reservation))
-    }
-
-    /// Process reservations which are offered. The basic process is
-    /// 1. Attempt to fill the offered reservations with available tasks
-    /// 2. For any reservation that filled, launch the assigned task on the executor.
-    /// 3. For any reservations that could not be filled, cancel the reservation (i.e. return the
-    ///    task slot back to the pool of available task slots).
-    ///
-    /// NOTE Error handling in this method is very important. No matter what we need to ensure
-    /// that unfilled reservations are cancelled or else they could become permanently "invisible"
-    /// to the scheduler.
-    pub(crate) async fn offer_reservation(
-        &self,
-        reservations: Vec<ReservedTaskSlots>,
-    ) -> Result<(Vec<ReservedTaskSlots>, usize)> {
-        let (free_list, pending_tasks) = match self
-            .task_manager
-            .fill_reservations(&reservations)
-            .await
-        {
-            Ok((assignments, mut unassigned_reservations, pending_tasks)) => {
-                // Put tasks to the same executor together
-                // And put tasks belonging to the same stage together for creating MultiTaskDefinition
-                let mut executor_stage_assignments: HashMap<
-                    String,
-                    HashMap<(String, usize), Vec<TaskDescription>>,
-                > = HashMap::new();
-                for (executor_id, task) in assignments.into_iter() {
-                    let stage_key =
-                        (task.partition.job_id.clone(), task.partition.stage_id);
-                    if let Some(tasks) = executor_stage_assignments.get_mut(&executor_id)
-                    {
-                        if let Some(executor_stage_tasks) = tasks.get_mut(&stage_key) {
-                            executor_stage_tasks.push(task);
-                        } else {
-                            tasks.insert(stage_key, vec![task]);
-                        }
-                    } else {
-                        let mut executor_stage_tasks: HashMap<
-                            (String, usize),
-                            Vec<TaskDescription>,
-                        > = HashMap::new();
-                        executor_stage_tasks.insert(stage_key, vec![task]);
-                        executor_stage_assignments
-                            .insert(executor_id, executor_stage_tasks);
-                    }
-                }
-
-                let mut join_handles = vec![];
-                for (executor_id, tasks) in executor_stage_assignments.into_iter() {
-                    let tasks: Vec<Vec<TaskDescription>> = tasks.into_values().collect();
-                    // Total number of tasks to be launched for one executor
-                    let n_tasks: usize =
-                        tasks.iter().map(|stage_tasks| stage_tasks.len()).sum();
-
-                    let task_manager = self.task_manager.clone();
-                    let executor_manager = self.executor_manager.clone();
-                    let join_handle = tokio::spawn(async move {
-                        let success = match executor_manager
-                            .get_executor_metadata(&executor_id)
-                            .await
-                        {
-                            Ok(executor) => {
-                                if let Err(e) = task_manager
-                                    .launch_multi_task(
-                                        &executor,
-                                        tasks,
-                                        &executor_manager,
-                                    )
-                                    .await
-                                {
-                                    error!("Failed to launch new task: {:?}", e);
-                                    false
-                                } else {
-                                    true
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to launch new task, could not get executor metadata: {:?}", e);
-                                false
-                            }
-                        };
-                        if success {
-                            vec![]
-                        } else {
-                            vec![ReservedTaskSlots::new_with_n(
-                                executor_id.clone(),
-                                n_tasks,
-                            )]
-                        }
-                    });
-                    join_handles.push(join_handle);
-                }
-
-                let unassigned_executor_reservations =
-                    futures::future::join_all(join_handles)
-                        .await
-                        .into_iter()
-                        .collect::<std::result::Result<
-                        Vec<Vec<ReservedTaskSlots>>,
-                        tokio::task::JoinError,
-                    >>()?;
-                unassigned_reservations.append(
-                    &mut unassigned_executor_reservations
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<ReservedTaskSlots>>(),
-                );
-                (unassigned_reservations, pending_tasks)
-            }
-            Err(e) => {
-                error!("Error filling reservations: {:?}", e);
-                (reservations, 0)
-            }
-        };
-
-        let mut new_reservations = vec![];
-        if !free_list.is_empty() {
-            // If any reserved slots remain, return them to the pool
-            self.executor_manager.cancel_reservations(free_list).await?;
-        }
-        if pending_tasks > 0 {
-            // If there are pending tasks available, try and schedule them
-            let pending_reservations = self
-                .executor_manager
-                .reserve_slots(pending_tasks as u32)
-                .await?;
-            new_reservations.extend(pending_reservations);
-        }
-
-        Ok((new_reservations, pending_tasks))
     }
 
     pub(crate) async fn submit_job(

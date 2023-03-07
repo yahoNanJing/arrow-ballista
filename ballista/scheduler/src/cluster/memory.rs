@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::cluster::{
-    reserve_slots_bias, reserve_slots_round_robin, ClusterState, ExecutorHeartbeatStream,
-    JobState, JobStateEvent, JobStateEventStream, JobStatus, TaskDistribution,
+    ClusterState, ExecutorHeartbeatStream, JobState, JobStateEvent, JobStateEventStream,
+    JobStatus,
 };
 use crate::state::execution_graph::ExecutionGraph;
 use crate::state::executor_manager::{coalesce_task_slots, ReservedTaskSlots};
@@ -60,75 +60,6 @@ pub struct InMemoryClusterState {
 
 #[async_trait]
 impl ClusterState for InMemoryClusterState {
-    async fn reserve_slots(
-        &self,
-        num_slots: u32,
-        distribution: TaskDistribution,
-        executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ReservedTaskSlots>> {
-        let mut guard = self.task_slots.lock();
-
-        let available_slots: Vec<&mut AvailableTaskSlots> = guard
-            .task_slots
-            .iter_mut()
-            .filter_map(|data| {
-                (data.slots > 0
-                    && executors
-                        .as_ref()
-                        .map(|executors| executors.contains(&data.executor_id))
-                        .unwrap_or(true))
-                .then_some(data)
-            })
-            .collect();
-
-        let reservations = match distribution {
-            TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
-            TaskDistribution::RoundRobin => {
-                reserve_slots_round_robin(available_slots, num_slots)
-            }
-        };
-
-        Ok(reservations)
-    }
-
-    async fn reserve_slots_exact(
-        &self,
-        num_slots: u32,
-        distribution: TaskDistribution,
-        executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ReservedTaskSlots>> {
-        let mut guard = self.task_slots.lock();
-
-        let rollback = guard.clone();
-
-        let available_slots: Vec<&mut AvailableTaskSlots> = guard
-            .task_slots
-            .iter_mut()
-            .filter_map(|data| {
-                (data.slots > 0
-                    && executors
-                        .as_ref()
-                        .map(|executors| executors.contains(&data.executor_id))
-                        .unwrap_or(true))
-                .then_some(data)
-            })
-            .collect();
-
-        let reservations = match distribution {
-            TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
-            TaskDistribution::RoundRobin => {
-                reserve_slots_round_robin(available_slots, num_slots)
-            }
-        };
-
-        if reservations.len() as u32 != num_slots {
-            *guard = rollback;
-            Ok(vec![])
-        } else {
-            Ok(reservations)
-        }
-    }
-
     async fn cancel_reservations(
         &self,
         reservations: Vec<ReservedTaskSlots>,
