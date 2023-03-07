@@ -207,11 +207,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 
     pub(crate) async fn offer_reservation(
         &self,
-        reservations: Vec<ReservedTaskSlots>,
+        _reservations: Vec<ReservedTaskSlots>,
     ) -> Result<()> {
         self.query_stage_event_loop
             .get_sender()?
-            .post_event(QueryStageSchedulerEvent::ReservationOffering(reservations))
+            .post_event(QueryStageSchedulerEvent::ReviveOffers)
             .await
     }
 

@@ -37,7 +37,6 @@ pub enum QueryStageSchedulerEvent {
         job_id: String,
         queued_at: u64,
         submitted_at: u64,
-        resubmit: bool,
     },
     // For a job which failed during planning
     JobPlanningFailed {
@@ -62,7 +61,7 @@ pub enum QueryStageSchedulerEvent {
     JobCancel(String),
     JobDataClean(String),
     TaskUpdating(String, Vec<TaskStatus>),
-    ReservationOffering(Vec<ReservedTaskSlots>),
+    ReviveOffers,
     ExecutorLost(String, Option<String>),
     CancelTasks(Vec<RunningTaskInfo>),
 }

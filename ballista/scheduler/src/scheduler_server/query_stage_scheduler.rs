@@ -128,7 +128,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                             job_id,
                             queued_at,
                             submitted_at: timestamp_millis(),
-                            resubmit: false,
                         }
                     };
                     if let Err(e) = tx_event.post_event(event).await {
@@ -140,69 +139,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 job_id,
                 queued_at,
                 submitted_at,
-                resubmit,
             } => {
-                if !resubmit {
-                    self.metrics_collector.record_submitted(
-                        &job_id,
-                        queued_at,
-                        submitted_at,
-                    );
+                self.metrics_collector
+                    .record_submitted(&job_id, queued_at, submitted_at);
 
-                    info!("Job {} submitted", job_id);
-                } else {
-                    debug!("Job {} resubmitted", job_id);
-                }
+                info!("Job {} submitted", job_id);
 
                 if self.state.config.is_push_staged_scheduling() {
-                    let available_tasks = self
-                        .state
-                        .task_manager
-                        .get_available_task_count(&job_id)
+                    tx_event
+                        .post_event(QueryStageSchedulerEvent::ReviveOffers)
                         .await?;
-
-                    let reservations: Vec<ReservedTaskSlots> = self
-                        .state
-                        .executor_manager
-                        .reserve_slots(available_tasks as u32)
-                        .await?;
-
-                    if reservations.is_empty() && self.job_resubmit_interval_ms.is_some()
-                    {
-                        let wait_ms = self.job_resubmit_interval_ms.unwrap();
-
-                        debug!(
-                            "No task slots reserved for job {job_id}, resubmitting after {wait_ms}ms"
-                        );
-
-                        tokio::task::spawn(async move {
-                            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-
-                            if let Err(e) = tx_event
-                                .post_event(QueryStageSchedulerEvent::JobSubmitted {
-                                    job_id,
-                                    queued_at,
-                                    submitted_at,
-                                    resubmit: true,
-                                })
-                                .await
-                            {
-                                error!("error resubmitting job: {}", e);
-                            }
-                        });
-                    } else {
-                        debug!(
-                            "Reserved {} task slots for submitted job {}",
-                            reservations.len(),
-                            job_id
-                        );
-
-                        tx_event
-                            .post_event(QueryStageSchedulerEvent::ReservationOffering(
-                                reservations,
-                            ))
-                            .await?;
-                    }
                 }
             }
             QueryStageSchedulerEvent::JobPlanningFailed {
@@ -284,13 +230,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     .await
                 {
                     Ok((stage_events, offers)) => {
+                        let n_rounds = offers.n_slots as u32;
+                        self.state
+                            .executor_manager
+                            .cancel_reservations(vec![offers])
+                            .await?;
                         if self.state.config.is_push_staged_scheduling() {
                             tx_event
-                                .post_event(
-                                    QueryStageSchedulerEvent::ReservationOffering(vec![
-                                        offers,
-                                    ]),
-                                )
+                                .post_event(QueryStageSchedulerEvent::ReviveOffers)
                                 .await?;
                         }
 
@@ -307,19 +254,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     }
                 }
             }
-            QueryStageSchedulerEvent::ReservationOffering(reservations) => {
-                let (reservations, pending) =
-                    self.state.offer_reservation(reservations).await?;
+            QueryStageSchedulerEvent::ReviveOffers => {
+                let pending = self.state.revive_offers().await?;
 
                 self.set_pending_tasks(pending);
-
-                if !reservations.is_empty() {
-                    tx_event
-                        .post_event(QueryStageSchedulerEvent::ReservationOffering(
-                            reservations,
-                        ))
-                        .await?;
-                }
             }
             QueryStageSchedulerEvent::ExecutorLost(executor_id, _) => {
                 match self.state.task_manager.executor_lost(&executor_id).await {
@@ -400,7 +338,6 @@ mod tests {
             job_id: "job-id".to_string(),
             queued_at: 0,
             submitted_at: 0,
-            resubmit: false,
         };
 
         query_stage_scheduler.on_receive(event, &tx, &rx).await?;

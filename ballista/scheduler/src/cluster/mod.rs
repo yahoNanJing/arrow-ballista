@@ -209,28 +209,6 @@ pub enum TaskDistribution {
 /// A trait that contains the necessary method to maintain a globally consistent view of cluster resources
 #[tonic::async_trait]
 pub trait ClusterState: Send + Sync + 'static {
-    /// Reserve up to `num_slots` executor task slots. If not enough task slots are available, reserve
-    /// as many as possible.
-    ///
-    /// If `executors` is provided, only reserve slots of the specified executor IDs
-    async fn reserve_slots(
-        &self,
-        num_slots: u32,
-        distribution: TaskDistribution,
-        executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ReservedTaskSlots>>;
-
-    /// Reserve exactly `num_slots` executor task slots. If not enough task slots are available,
-    /// returns an empty vec
-    ///
-    /// If `executors` is provided, only reserve slots of the specified executor IDs
-    async fn reserve_slots_exact(
-        &self,
-        num_slots: u32,
-        distribution: TaskDistribution,
-        executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ReservedTaskSlots>>;
-
     /// Cancel the specified reservations. This will make reserved executor slots available to other
     /// tasks.
     /// This operations should be atomic. Either all reservations are cancelled or none are

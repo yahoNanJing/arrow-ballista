@@ -127,14 +127,14 @@ pub struct TaskManager<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     codec: BallistaCodec<T, U>,
     scheduler_id: String,
     // Cache for active jobs curated by this scheduler
-    active_job_cache: ActiveJobCache,
+    pub(crate) active_job_cache: ActiveJobCache,
     launcher: Arc<dyn TaskLauncher>,
 }
 
 #[derive(Clone)]
-struct JobInfoCache {
+pub(crate) struct JobInfoCache {
     // Cache for active execution graphs curated by this scheduler
-    execution_graph: Arc<RwLock<ExecutionGraph>>,
+    pub(crate) execution_graph: Arc<RwLock<ExecutionGraph>>,
     // Cache for encoded execution stage plan to avoid duplicated encoding for multiple tasks
     encoded_stage_plans: HashMap<usize, Vec<u8>>,
 }
