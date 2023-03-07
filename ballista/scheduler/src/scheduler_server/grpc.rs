@@ -139,10 +139,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
 
             // Find `num_free_slots` next tasks when available
             let mut next_tasks = vec![];
-            let reservations = vec![
-                ExecutorReservation::new(metadata.id.clone());
-                num_free_slots as usize
-            ];
+            let reservations = vec![ExecutorReservation::new_with_n(
+                metadata.id.clone(),
+                num_free_slots as usize,
+            )];
             if let Ok((mut assignments, _, _)) = self
                 .state
                 .task_manager

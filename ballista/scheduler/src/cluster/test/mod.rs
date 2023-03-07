@@ -18,7 +18,7 @@
 use crate::cluster::{ClusterState, JobState, JobStateEvent, TaskDistribution};
 use crate::scheduler_server::timestamp_millis;
 use crate::state::execution_graph::ExecutionGraph;
-use crate::state::executor_manager::ExecutorReservation;
+use crate::state::executor_manager::{split_off, total_task_slots, ExecutorReservation};
 use crate::test_utils::{await_condition, mock_completed_task, mock_executor};
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf::job_status::Status;
@@ -176,15 +176,15 @@ impl<S: ClusterState> ClusterStateTest<S> {
     }
 
     pub async fn cancel_reservations(mut self, num_slots: usize) -> Result<Self> {
-        if self.reservations.len() < num_slots {
+        let total_task_slots = total_task_slots(self.reservations.as_slice());
+        if total_task_slots < num_slots {
             return Err(BallistaError::General(format!(
                 "Not enough reservations to cancel, expected {} but found {}",
-                num_slots,
-                self.reservations.len()
+                num_slots, total_task_slots
             )));
         }
 
-        let to_keep = self.reservations.split_off(num_slots);
+        let to_keep = split_off(self.reservations.as_mut(), num_slots);
 
         self.state
             .cancel_reservations(std::mem::take(&mut self.reservations))
@@ -196,12 +196,11 @@ impl<S: ClusterState> ClusterStateTest<S> {
     }
 
     pub fn assert_open_reservations(self, n: usize) -> Self {
+        let total_task_slots = total_task_slots(self.reservations.as_slice());
         assert_eq!(
-            self.reservations.len(),
-            n,
+            total_task_slots, n,
             "Expectedt {} open reservations but found {}",
-            n,
-            self.reservations.len()
+            n, total_task_slots
         );
         self
     }
@@ -211,12 +210,11 @@ impl<S: ClusterState> ClusterStateTest<S> {
         n: usize,
         predicate: F,
     ) -> Self {
+        let total_task_slots = total_task_slots(self.reservations.as_slice());
         assert_eq!(
-            self.reservations.len(),
-            n,
+            total_task_slots, n,
             "Expected {} open reservations but found {}",
-            n,
-            self.reservations.len()
+            n, total_task_slots
         );
 
         for res in &self.reservations {
@@ -276,16 +274,16 @@ impl<S: ClusterState> ClusterStateTest<S> {
                 FuzzEvent::Reserved(reservations) => {
                     self.reservations.extend(reservations);
                     assert!(
-                        self.reservations.len() <= total_slots as usize,
+                        total_task_slots(self.reservations.as_slice())
+                            <= total_slots as usize,
                         "More than total number of slots was reserved"
                     );
                 }
                 FuzzEvent::Cancelled(reservations) => {
                     for res in reservations {
-                        let idx = self
-                            .reservations
-                            .iter()
-                            .find_position(|r| r.executor_id == res.executor_id);
+                        let idx = self.reservations.iter().find_position(|r| {
+                            r.executor_id == res.executor_id && r.n_slots == res.n_slots
+                        });
                         assert!(idx.is_some(), "Received invalid cancellation, not existing reservation for executor ID {}", res.executor_id);
 
                         self.reservations.swap_remove(idx.unwrap().0);

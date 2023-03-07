@@ -162,23 +162,21 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         &self,
         executor_id: &str,
         tasks_status: Vec<TaskStatus>,
-    ) -> Result<(Vec<QueryStageSchedulerEvent>, Vec<ExecutorReservation>)> {
+    ) -> Result<(Vec<QueryStageSchedulerEvent>, ExecutorReservation)> {
         let executor = self
             .executor_manager
             .get_executor_metadata(executor_id)
             .await?;
 
-        let total_num_tasks = tasks_status.len();
-        let reservations = (0..total_num_tasks)
-            .map(|_| ExecutorReservation::new(executor_id.to_owned()))
-            .collect();
+        let reservation =
+            ExecutorReservation::new_with_n(executor_id.to_owned(), tasks_status.len());
 
         let events = self
             .task_manager
             .update_task_statuses(&executor, tasks_status)
             .await?;
 
-        Ok((events, reservations))
+        Ok((events, reservation))
     }
 
     /// Process reservations which are offered. The basic process is
@@ -264,7 +262,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
                         if success {
                             vec![]
                         } else {
-                            vec![ExecutorReservation::new(executor_id.clone(),); n_tasks]
+                            vec![ExecutorReservation::new_with_n(
+                                executor_id.clone(),
+                                n_tasks,
+                            )]
                         }
                     });
                     join_handles.push(join_handle);
@@ -296,7 +297,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         if !free_list.is_empty() {
             // If any reserved slots remain, return them to the pool
             self.executor_manager.cancel_reservations(free_list).await?;
-        } else if pending_tasks > 0 {
+        }
+        if pending_tasks > 0 {
             // If there are pending tasks available, try and schedule them
             let pending_reservations = self
                 .executor_manager
@@ -429,6 +431,7 @@ mod test {
     use crate::config::SchedulerConfig;
 
     use crate::scheduler_server::timestamp_millis;
+    use crate::state::executor_manager::total_task_slots;
     use crate::test_utils::{test_cluster_context, BlackholeTaskLauncher};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::logical_expr::{col, sum};
@@ -467,7 +470,7 @@ mod test {
         // All reservations should have been cancelled so we should be able to reserve them now
         let reservations = state.executor_manager.reserve_slots(4).await?;
 
-        assert_eq!(reservations.len(), 4);
+        assert_eq!(total_task_slots(reservations.as_slice()), 4);
 
         Ok(())
     }
@@ -663,19 +666,19 @@ mod test {
 
         let reservations = state.executor_manager.reserve_slots(1).await?;
 
-        assert_eq!(reservations.len(), 1);
+        assert_eq!(total_task_slots(reservations.as_slice()), 1);
 
         // Offer the reservation. It should be filled with one of the 4 pending tasks. The other 3 should
         // be reserved for the other 3 tasks, emitting another offer event
         let (reservations, pending) = state.offer_reservation(reservations).await?;
 
         assert_eq!(pending, 3);
-        assert_eq!(reservations.len(), 3);
+        assert_eq!(total_task_slots(reservations.as_slice()), 3);
 
         // Remaining 3 task slots should be reserved for pending tasks
         let reservations = state.executor_manager.reserve_slots(4).await?;
 
-        assert_eq!(reservations.len(), 0);
+        assert_eq!(total_task_slots(reservations.as_slice()), 0);
 
         Ok(())
     }

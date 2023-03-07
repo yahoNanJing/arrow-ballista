@@ -287,7 +287,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         if self.state.config.is_push_staged_scheduling() {
                             tx_event
                                 .post_event(
-                                    QueryStageSchedulerEvent::ReservationOffering(offers),
+                                    QueryStageSchedulerEvent::ReservationOffering(vec![
+                                        offers,
+                                    ]),
                                 )
                                 .await?;
                         }

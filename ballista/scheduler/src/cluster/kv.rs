@@ -22,7 +22,7 @@ use crate::cluster::{
 };
 use crate::scheduler_server::SessionBuilder;
 use crate::state::execution_graph::ExecutionGraph;
-use crate::state::executor_manager::ExecutorReservation;
+use crate::state::executor_manager::{coalesce_task_slots, ExecutorReservation};
 use crate::state::session_manager::create_datafusion_context;
 use crate::state::{decode_into, decode_protobuf};
 use async_trait::async_trait;
@@ -109,7 +109,7 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     ))
                 })?;
 
-            let mut available_slots: Vec<&mut AvailableTaskSlots> = slots
+            let available_slots: Vec<&mut AvailableTaskSlots> = slots
                 .task_slots
                 .iter_mut()
                 .filter_map(|data| {
@@ -121,8 +121,6 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     .then_some(data)
                 })
                 .collect();
-
-            available_slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
 
             let reservations = match distribution {
                 TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
@@ -160,7 +158,7 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     ))
                 })?;
 
-            let mut available_slots: Vec<&mut AvailableTaskSlots> = slots
+            let available_slots: Vec<&mut AvailableTaskSlots> = slots
                 .task_slots
                 .iter_mut()
                 .filter_map(|data| {
@@ -172,8 +170,6 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     .then_some(data)
                 })
                 .collect();
-
-            available_slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
 
             let reservations = match distribution {
                 TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
@@ -198,8 +194,9 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         &self,
         reservations: Vec<ExecutorReservation>,
     ) -> Result<()> {
-        let lock = self.store.lock(Keyspace::Slots, "all").await?;
+        let increments = coalesce_task_slots(reservations.as_slice());
 
+        let lock = self.store.lock(Keyspace::Slots, "all").await?;
         with_lock(lock, async {
             let resources = self.store.get(Keyspace::Slots, "all").await?;
 
@@ -209,15 +206,6 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         "Unexpected value in executor slots state: {err:?}"
                     ))
                 })?;
-
-            let mut increments = HashMap::new();
-            for ExecutorReservation { executor_id, .. } in reservations {
-                if let Some(inc) = increments.get_mut(&executor_id) {
-                    *inc += 1;
-                } else {
-                    increments.insert(executor_id, 1usize);
-                }
-            }
 
             for executor_slots in slots.task_slots.iter_mut() {
                 if let Some(slots) = increments.get(&executor_slots.executor_id) {
@@ -297,10 +285,8 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             Ok(vec![])
         } else {
             let num_slots = spec.available_task_slots as usize;
-            let mut reservations: Vec<ExecutorReservation> = vec![];
-            for _ in 0..num_slots {
-                reservations.push(ExecutorReservation::new(executor_id.clone()));
-            }
+            let reservation =
+                ExecutorReservation::new_with_n(executor_id.clone(), num_slots);
 
             let available_slots = AvailableTaskSlots {
                 executor_id,
@@ -335,7 +321,7 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             })
             .await?;
 
-            Ok(reservations)
+            Ok(vec![reservation])
         }
     }
 

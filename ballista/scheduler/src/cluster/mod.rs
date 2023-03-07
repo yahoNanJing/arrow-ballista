@@ -384,14 +384,17 @@ pub(crate) fn reserve_slots_bias(
 ) -> Vec<ExecutorReservation> {
     let mut reservations = Vec::with_capacity(n as usize);
 
+    // Sort the slots by descending order
+    slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
     let mut iter = slots.iter_mut();
 
     while n > 0 {
         if let Some(executor) = iter.next() {
             let take = executor.slots.min(n);
-            for _ in 0..take {
-                reservations.push(ExecutorReservation::new(executor.executor_id.clone()));
-            }
+            reservations.push(ExecutorReservation::new_with_n(
+                executor.executor_id.clone(),
+                take as usize,
+            ));
 
             executor.slots -= take;
             n -= take;
@@ -408,6 +411,9 @@ pub(crate) fn reserve_slots_round_robin(
     mut n: u32,
 ) -> Vec<ExecutorReservation> {
     let mut reservations = Vec::with_capacity(n as usize);
+
+    // Sort the slots by descending order
+    slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
 
     let mut last_updated_idx = 0usize;
 

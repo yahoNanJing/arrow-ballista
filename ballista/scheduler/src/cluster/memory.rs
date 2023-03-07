@@ -20,7 +20,7 @@ use crate::cluster::{
     JobState, JobStateEvent, JobStateEventStream, JobStatus, TaskDistribution,
 };
 use crate::state::execution_graph::ExecutionGraph;
-use crate::state::executor_manager::ExecutorReservation;
+use crate::state::executor_manager::{coalesce_task_slots, ExecutorReservation};
 use async_trait::async_trait;
 use ballista_core::config::BallistaConfig;
 use ballista_core::error::{BallistaError, Result};
@@ -68,7 +68,7 @@ impl ClusterState for InMemoryClusterState {
     ) -> Result<Vec<ExecutorReservation>> {
         let mut guard = self.task_slots.lock();
 
-        let mut available_slots: Vec<&mut AvailableTaskSlots> = guard
+        let available_slots: Vec<&mut AvailableTaskSlots> = guard
             .task_slots
             .iter_mut()
             .filter_map(|data| {
@@ -80,8 +80,6 @@ impl ClusterState for InMemoryClusterState {
                 .then_some(data)
             })
             .collect();
-
-        available_slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
 
         let reservations = match distribution {
             TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
@@ -103,7 +101,7 @@ impl ClusterState for InMemoryClusterState {
 
         let rollback = guard.clone();
 
-        let mut available_slots: Vec<&mut AvailableTaskSlots> = guard
+        let available_slots: Vec<&mut AvailableTaskSlots> = guard
             .task_slots
             .iter_mut()
             .filter_map(|data| {
@@ -115,8 +113,6 @@ impl ClusterState for InMemoryClusterState {
                 .then_some(data)
             })
             .collect();
-
-        available_slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
 
         let reservations = match distribution {
             TaskDistribution::Bias => reserve_slots_bias(available_slots, num_slots),
@@ -137,14 +133,7 @@ impl ClusterState for InMemoryClusterState {
         &self,
         reservations: Vec<ExecutorReservation>,
     ) -> Result<()> {
-        let mut increments = HashMap::new();
-        for ExecutorReservation { executor_id, .. } in reservations {
-            if let Some(inc) = increments.get_mut(&executor_id) {
-                *inc += 1;
-            } else {
-                increments.insert(executor_id, 1usize);
-            }
-        }
+        let increments = coalesce_task_slots(reservations.as_slice());
 
         let mut guard = self.task_slots.lock();
 
@@ -186,9 +175,7 @@ impl ClusterState for InMemoryClusterState {
         if reserve {
             let slots = std::mem::take(&mut spec.available_task_slots) as usize;
 
-            let reservations = (0..slots)
-                .map(|_| ExecutorReservation::new(metadata.id.clone()))
-                .collect();
+            let reservation = ExecutorReservation::new_with_n(metadata.id.clone(), slots);
 
             self.executors.insert(metadata.id.clone(), metadata.clone());
 
@@ -199,7 +186,7 @@ impl ClusterState for InMemoryClusterState {
 
             self.heartbeat_sender.send(&heartbeat);
 
-            Ok(reservations)
+            Ok(vec![reservation])
         } else {
             self.executors.insert(metadata.id.clone(), metadata.clone());
 
