@@ -18,7 +18,7 @@
 use crate::cluster::{ClusterState, JobState, JobStateEvent, TaskDistribution};
 use crate::scheduler_server::timestamp_millis;
 use crate::state::execution_graph::ExecutionGraph;
-use crate::state::executor_manager::ExecutorReservation;
+use crate::state::executor_manager::{split_off, total_task_slots, ReservedTaskSlots};
 use crate::test_utils::{await_condition, mock_completed_task, mock_executor};
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf::job_status::Status;
@@ -37,7 +37,7 @@ use tokio::sync::RwLock;
 pub struct ClusterStateTest<S: ClusterState> {
     state: Arc<S>,
     received_heartbeats: Arc<DashMap<String, ExecutorHeartbeat>>,
-    reservations: Vec<ExecutorReservation>,
+    reservations: Vec<ReservedTaskSlots>,
     total_task_slots: u32,
 }
 
@@ -176,15 +176,15 @@ impl<S: ClusterState> ClusterStateTest<S> {
     }
 
     pub async fn cancel_reservations(mut self, num_slots: usize) -> Result<Self> {
-        if self.reservations.len() < num_slots {
+        let total_task_slots = total_task_slots(self.reservations.as_slice());
+        if total_task_slots < num_slots {
             return Err(BallistaError::General(format!(
                 "Not enough reservations to cancel, expected {} but found {}",
-                num_slots,
-                self.reservations.len()
+                num_slots, total_task_slots
             )));
         }
 
-        let to_keep = self.reservations.split_off(num_slots);
+        let to_keep = split_off(self.reservations.as_mut(), num_slots);
 
         self.state
             .cancel_reservations(std::mem::take(&mut self.reservations))
@@ -196,27 +196,25 @@ impl<S: ClusterState> ClusterStateTest<S> {
     }
 
     pub fn assert_open_reservations(self, n: usize) -> Self {
+        let total_task_slots = total_task_slots(self.reservations.as_slice());
         assert_eq!(
-            self.reservations.len(),
-            n,
+            total_task_slots, n,
             "Expectedt {} open reservations but found {}",
-            n,
-            self.reservations.len()
+            n, total_task_slots
         );
         self
     }
 
-    pub fn assert_open_reservations_with<F: Fn(&ExecutorReservation) -> bool>(
+    pub fn assert_open_reservations_with<F: Fn(&ReservedTaskSlots) -> bool>(
         self,
         n: usize,
         predicate: F,
     ) -> Self {
+        let total_task_slots = total_task_slots(self.reservations.as_slice());
         assert_eq!(
-            self.reservations.len(),
-            n,
+            total_task_slots, n,
             "Expected {} open reservations but found {}",
-            n,
-            self.reservations.len()
+            n, total_task_slots
         );
 
         for res in &self.reservations {
@@ -300,8 +298,8 @@ impl<S: ClusterState> ClusterStateTest<S> {
 
 #[derive(Debug, Clone)]
 enum FuzzEvent {
-    Reserved(Vec<ExecutorReservation>),
-    Cancelled(Vec<ExecutorReservation>),
+    Reserved(Vec<ReservedTaskSlots>),
+    Cancelled(Vec<ReservedTaskSlots>),
 }
 
 pub async fn test_fuzz_reservations<S: ClusterState>(

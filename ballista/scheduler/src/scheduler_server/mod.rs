@@ -39,7 +39,7 @@ use crate::scheduler_server::event::QueryStageSchedulerEvent;
 use crate::scheduler_server::query_stage_scheduler::QueryStageScheduler;
 
 use crate::state::executor_manager::{
-    ExecutorManager, ExecutorReservation, DEFAULT_EXECUTOR_TIMEOUT_SECONDS,
+    ExecutorManager, ReservedTaskSlots, DEFAULT_EXECUTOR_TIMEOUT_SECONDS,
     EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS,
 };
 
@@ -207,7 +207,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 
     pub(crate) async fn offer_reservation(
         &self,
-        reservations: Vec<ExecutorReservation>,
+        reservations: Vec<ReservedTaskSlots>,
     ) -> Result<()> {
         self.query_stage_event_loop
             .get_sender()?

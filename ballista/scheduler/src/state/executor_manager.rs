@@ -46,14 +46,90 @@ type ExecutorClients = Arc<DashMap<String, ExecutorGrpcClient<Channel>>>;
 /// Represents a task slot that is reserved (i.e. available for scheduling but not visible to the
 /// rest of the system).
 #[derive(Clone, Debug)]
-pub struct ExecutorReservation {
+pub struct ReservedTaskSlots {
     pub executor_id: String,
+    pub n_slots: usize,
 }
 
-impl ExecutorReservation {
+impl ReservedTaskSlots {
     pub fn new(executor_id: String) -> Self {
-        Self { executor_id }
+        Self::new_with_n(executor_id, 1)
     }
+
+    pub fn new_with_n(executor_id: String, n_slots: usize) -> Self {
+        Self {
+            executor_id,
+            n_slots,
+        }
+    }
+}
+
+/// Coalesce reserved task slots based on executor.
+///
+/// [`ReservedTaskSlots`] with 0 slots will be removed
+pub fn coalesce_task_slots(reservations: &[ReservedTaskSlots]) -> HashMap<String, usize> {
+    let mut coalesced_reservations = HashMap::new();
+    for ReservedTaskSlots {
+        executor_id,
+        n_slots,
+    } in reservations
+    {
+        if *n_slots > 0 {
+            let inc = coalesced_reservations
+                .entry(executor_id.clone())
+                .or_insert_with(|| 0usize);
+            *inc += n_slots;
+        }
+    }
+
+    coalesced_reservations
+}
+
+/// Get the total reserved task slot number
+pub fn total_task_slots(reservations: &[ReservedTaskSlots]) -> usize {
+    let mut total_task_slots = 0usize;
+    reservations
+        .iter()
+        .for_each(|reservation| total_task_slots += reservation.n_slots);
+    total_task_slots
+}
+
+/// Split off a vector into two.
+///
+/// The total slot number of the input vector will be less or equal than [`n_slots`].
+/// It will return the left entries.
+pub fn split_off(
+    reservations: &mut Vec<ReservedTaskSlots>,
+    n_slots: usize,
+) -> Vec<ReservedTaskSlots> {
+    if n_slots == 0 {
+        return reservations.split_off(0);
+    }
+    let mut offset = 0usize;
+    let mut increment = 0usize;
+    for reservation in reservations.iter() {
+        increment += reservation.n_slots;
+        if increment >= n_slots {
+            break;
+        }
+        offset += 1;
+    }
+
+    let mut other = reservations.split_off(offset + 1);
+
+    let last_remain = increment - n_slots;
+    if last_remain > 0 {
+        reservations[offset].n_slots -= last_remain;
+        other.insert(
+            0,
+            ReservedTaskSlots::new_with_n(
+                reservations[offset].executor_id.clone(),
+                last_remain,
+            ),
+        );
+    }
+
+    other
 }
 
 // TODO move to configuration file
@@ -144,7 +220,7 @@ impl ExecutorManager {
     /// Reserve up to n executor task slots. Once reserved these slots will not be available
     /// for scheduling.
     /// This operation is atomic, so if this method return an Err, no slots have been reserved.
-    pub async fn reserve_slots(&self, n: u32) -> Result<Vec<ExecutorReservation>> {
+    pub async fn reserve_slots(&self, n: u32) -> Result<Vec<ReservedTaskSlots>> {
         if self.slots_policy.is_local() {
             self.reserve_slots_local(n).await
         } else {
@@ -158,7 +234,7 @@ impl ExecutorManager {
         }
     }
 
-    async fn reserve_slots_local(&self, n: u32) -> Result<Vec<ExecutorReservation>> {
+    async fn reserve_slots_local(&self, n: u32) -> Result<Vec<ReservedTaskSlots>> {
         debug!("Attempting to reserve {} executor slots", n);
 
         let alive_executors = self.get_alive_executors_within_one_minute();
@@ -180,7 +256,7 @@ impl ExecutorManager {
         &self,
         mut n: u32,
         alive_executors: HashSet<String>,
-    ) -> Result<Vec<ExecutorReservation>> {
+    ) -> Result<Vec<ReservedTaskSlots>> {
         let mut executor_data = self.executor_data.lock();
 
         let mut available_executor_data: Vec<&mut ExecutorData> = executor_data
@@ -194,7 +270,7 @@ impl ExecutorManager {
         available_executor_data
             .sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
 
-        let mut reservations: Vec<ExecutorReservation> = vec![];
+        let mut reservations: Vec<ReservedTaskSlots> = vec![];
 
         // Exclusive
         let mut last_updated_idx = 0usize;
@@ -211,7 +287,7 @@ impl ExecutorManager {
                     break;
                 }
 
-                reservations.push(ExecutorReservation::new(data.executor_id.clone()));
+                reservations.push(ReservedTaskSlots::new(data.executor_id.clone()));
                 data.available_task_slots -= 1;
                 n -= 1;
 
@@ -232,7 +308,7 @@ impl ExecutorManager {
     /// so either the entire pool of reserved task slots it returned or none are.
     pub async fn cancel_reservations(
         &self,
-        reservations: Vec<ExecutorReservation>,
+        reservations: Vec<ReservedTaskSlots>,
     ) -> Result<()> {
         if self.slots_policy.is_local() {
             self.cancel_reservations_local(reservations).await
@@ -243,21 +319,14 @@ impl ExecutorManager {
 
     async fn cancel_reservations_local(
         &self,
-        reservations: Vec<ExecutorReservation>,
+        reservations: Vec<ReservedTaskSlots>,
     ) -> Result<()> {
-        let mut executor_slots: HashMap<String, u32> = HashMap::new();
-        for reservation in reservations {
-            if let Some(slots) = executor_slots.get_mut(&reservation.executor_id) {
-                *slots += 1;
-            } else {
-                executor_slots.insert(reservation.executor_id, 1);
-            }
-        }
+        let executor_slots = coalesce_task_slots(reservations.as_slice());
 
         let mut executor_data = self.executor_data.lock();
         for (id, released_slots) in executor_slots.into_iter() {
             if let Some(slots) = executor_data.get_mut(&id) {
-                slots.available_task_slots += released_slots;
+                slots.available_task_slots += released_slots as u32;
             } else {
                 warn!("ExecutorData for {} is not cached in memory", id);
             }
@@ -439,7 +508,7 @@ impl ExecutorManager {
         metadata: ExecutorMetadata,
         specification: ExecutorData,
         reserve: bool,
-    ) -> Result<Vec<ExecutorReservation>> {
+    ) -> Result<Vec<ReservedTaskSlots>> {
         debug!(
             "registering executor {} with {} task slots",
             metadata.id, specification.total_task_slots
@@ -481,10 +550,11 @@ impl ExecutorManager {
         } else {
             let mut specification = specification;
             let num_slots = specification.available_task_slots as usize;
-            let mut reservations: Vec<ExecutorReservation> = vec![];
-            for _ in 0..num_slots {
-                reservations.push(ExecutorReservation::new(metadata.id.clone()));
-            }
+            let reservation: Vec<ReservedTaskSlots> =
+                vec![ReservedTaskSlots::new_with_n(
+                    metadata.id.clone(),
+                    num_slots,
+                )];
 
             specification.available_task_slots = 0;
 
@@ -501,7 +571,7 @@ impl ExecutorManager {
             self.executors_heartbeat
                 .insert(initial_heartbeat.executor_id.clone(), initial_heartbeat);
 
-            Ok(reservations)
+            Ok(reservation)
         }
     }
 
@@ -677,7 +747,9 @@ mod test {
     use crate::config::SlotsPolicy;
 
     use crate::scheduler_server::timestamp_secs;
-    use crate::state::executor_manager::{ExecutorManager, ExecutorReservation};
+    use crate::state::executor_manager::{
+        total_task_slots, ExecutorManager, ReservedTaskSlots,
+    };
     use crate::test_utils::test_cluster_context;
     use ballista_core::error::Result;
     use ballista_core::serde::protobuf::executor_status::Status;
@@ -713,7 +785,7 @@ mod test {
         let reservations = executor_manager.reserve_slots(40).await?;
 
         assert_eq!(
-            reservations.len(),
+            total_task_slots(reservations.as_slice()),
             40,
             "Expected 40 reservations for policy {slots_policy:?}"
         );
@@ -725,7 +797,7 @@ mod test {
         let reservations = executor_manager.reserve_slots(40).await?;
 
         assert_eq!(
-            reservations.len(),
+            total_task_slots(reservations.as_slice()),
             40,
             "Expected 40 reservations for policy {slots_policy:?}"
         );
@@ -759,12 +831,12 @@ mod test {
         // Reserve all the slots
         let reservations = executor_manager.reserve_slots(30).await?;
 
-        assert_eq!(reservations.len(), 30);
+        assert_eq!(total_task_slots(reservations.as_slice()), 30);
 
         // Try to reserve 30 more. Only ten are available though so we should only get 10
         let more_reservations = executor_manager.reserve_slots(30).await?;
 
-        assert_eq!(more_reservations.len(), 10);
+        assert_eq!(total_task_slots(more_reservations.as_slice()), 10);
 
         // Now cancel them
         executor_manager.cancel_reservations(reservations).await?;
@@ -775,11 +847,11 @@ mod test {
         // Now reserve again
         let reservations = executor_manager.reserve_slots(40).await?;
 
-        assert_eq!(reservations.len(), 40);
+        assert_eq!(total_task_slots(reservations.as_slice()), 40);
 
         let more_reservations = executor_manager.reserve_slots(30).await?;
 
-        assert_eq!(more_reservations.len(), 0);
+        assert_eq!(total_task_slots(more_reservations.as_slice()), 0);
 
         Ok(())
     }
@@ -795,7 +867,7 @@ mod test {
 
     async fn test_reserve_concurrent_inner(slots_policy: SlotsPolicy) -> Result<()> {
         let (sender, mut receiver) =
-            tokio::sync::mpsc::channel::<Result<Vec<ExecutorReservation>>>(1000);
+            tokio::sync::mpsc::channel::<Result<Vec<ReservedTaskSlots>>>(1000);
 
         let executors = test_executors(10, 4);
 
@@ -822,14 +894,14 @@ mod test {
             }
         }
 
-        let mut total_reservations: Vec<ExecutorReservation> = vec![];
+        let mut total_reservations: Vec<ReservedTaskSlots> = vec![];
 
         while let Some(Ok(reservations)) = receiver.recv().await {
             total_reservations.extend(reservations);
         }
 
         // The total number of reservations should never exceed the number of slots
-        assert_eq!(total_reservations.len(), 40);
+        assert_eq!(total_task_slots(total_reservations.as_slice()), 40);
 
         Ok(())
     }
@@ -856,13 +928,13 @@ mod test {
                 .register_executor(executor_metadata, executor_data, true)
                 .await?;
 
-            assert_eq!(reservations.len(), 4);
+            assert_eq!(total_task_slots(reservations.as_slice()), 4);
         }
 
         // All slots should be reserved
         let reservations = executor_manager.reserve_slots(1).await?;
 
-        assert_eq!(reservations.len(), 0);
+        assert_eq!(total_task_slots(reservations.as_slice()), 0);
 
         Ok(())
     }
@@ -886,7 +958,7 @@ mod test {
         let executors = test_executors(2, 4);
 
         for (executor_metadata, executor_data) in executors {
-            let _ = executor_manager
+            executor_manager
                 .register_executor(executor_metadata, executor_data, false)
                 .await?;
         }
@@ -905,7 +977,11 @@ mod test {
 
         let reservations = executor_manager.reserve_slots(8).await?;
 
-        assert_eq!(reservations.len(), 4, "Expected only four reservations");
+        assert_eq!(
+            total_task_slots(reservations.as_slice()),
+            4,
+            "Expected only four reservations"
+        );
 
         assert!(
             reservations
