@@ -32,7 +32,7 @@ use crate::cluster::storage::KeyValueStore;
 use crate::config::{ClusterStorageConfig, SchedulerConfig};
 use crate::scheduler_server::SessionBuilder;
 use crate::state::execution_graph::ExecutionGraph;
-use crate::state::executor_manager::ExecutorReservation;
+use crate::state::executor_manager::ReservedTaskSlots;
 use ballista_core::config::BallistaConfig;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf::{AvailableTaskSlots, ExecutorHeartbeat, JobStatus};
@@ -218,7 +218,7 @@ pub trait ClusterState: Send + Sync + 'static {
         num_slots: u32,
         distribution: TaskDistribution,
         executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ExecutorReservation>>;
+    ) -> Result<Vec<ReservedTaskSlots>>;
 
     /// Reserve exactly `num_slots` executor task slots. If not enough task slots are available,
     /// returns an empty vec
@@ -229,14 +229,14 @@ pub trait ClusterState: Send + Sync + 'static {
         num_slots: u32,
         distribution: TaskDistribution,
         executors: Option<HashSet<String>>,
-    ) -> Result<Vec<ExecutorReservation>>;
+    ) -> Result<Vec<ReservedTaskSlots>>;
 
     /// Cancel the specified reservations. This will make reserved executor slots available to other
     /// tasks.
     /// This operations should be atomic. Either all reservations are cancelled or none are
     async fn cancel_reservations(
         &self,
-        reservations: Vec<ExecutorReservation>,
+        reservations: Vec<ReservedTaskSlots>,
     ) -> Result<()>;
 
     /// Register a new executor in the cluster. If `reserve` is true, then the executors task slots
@@ -247,7 +247,7 @@ pub trait ClusterState: Send + Sync + 'static {
         metadata: ExecutorMetadata,
         spec: ExecutorData,
         reserve: bool,
-    ) -> Result<Vec<ExecutorReservation>>;
+    ) -> Result<Vec<ReservedTaskSlots>>;
 
     /// Save the executor metadata. This will overwrite existing metadata for the executor ID
     async fn save_executor_metadata(&self, metadata: ExecutorMetadata) -> Result<()>;
@@ -381,17 +381,20 @@ pub trait JobState: Send + Sync {
 pub(crate) fn reserve_slots_bias(
     mut slots: Vec<&mut AvailableTaskSlots>,
     mut n: u32,
-) -> Vec<ExecutorReservation> {
+) -> Vec<ReservedTaskSlots> {
     let mut reservations = Vec::with_capacity(n as usize);
 
+    // Sort the slots by descending order
+    slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
     let mut iter = slots.iter_mut();
 
     while n > 0 {
         if let Some(executor) = iter.next() {
             let take = executor.slots.min(n);
-            for _ in 0..take {
-                reservations.push(ExecutorReservation::new(executor.executor_id.clone()));
-            }
+            reservations.push(ReservedTaskSlots::new_with_n(
+                executor.executor_id.clone(),
+                take as usize,
+            ));
 
             executor.slots -= take;
             n -= take;
@@ -406,8 +409,11 @@ pub(crate) fn reserve_slots_bias(
 pub(crate) fn reserve_slots_round_robin(
     mut slots: Vec<&mut AvailableTaskSlots>,
     mut n: u32,
-) -> Vec<ExecutorReservation> {
+) -> Vec<ReservedTaskSlots> {
     let mut reservations = Vec::with_capacity(n as usize);
+
+    // Sort the slots by descending order
+    slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
 
     let mut last_updated_idx = 0usize;
 
@@ -424,7 +430,7 @@ pub(crate) fn reserve_slots_round_robin(
                 break;
             }
 
-            reservations.push(ExecutorReservation::new(data.executor_id.clone()));
+            reservations.push(ReservedTaskSlots::new(data.executor_id.clone()));
             data.slots -= 1;
             n -= 1;
 

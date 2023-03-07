@@ -20,7 +20,9 @@ use crate::scheduler_server::event::QueryStageSchedulerEvent;
 use crate::state::execution_graph::{
     ExecutionGraph, ExecutionStage, RunningTaskInfo, TaskDescription,
 };
-use crate::state::executor_manager::{ExecutorManager, ExecutorReservation};
+use crate::state::executor_manager::{
+    coalesce_task_slots, ExecutorManager, ReservedTaskSlots,
+};
 
 use ballista_core::error::BallistaError;
 use ballista_core::error::Result;
@@ -335,34 +337,49 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
     /// 3. The number of pending tasks across active jobs
     pub async fn fill_reservations(
         &self,
-        free_reservations: &[ExecutorReservation],
+        reservations: &[ReservedTaskSlots],
     ) -> Result<(
         Vec<(String, TaskDescription)>,
-        Vec<ExecutorReservation>,
+        Vec<ReservedTaskSlots>,
         usize,
     )> {
+        let coalesced_reservations = coalesce_task_slots(reservations);
+        let mut free_reservations: Vec<ReservedTaskSlots> = coalesced_reservations
+            .into_iter()
+            .map(|(executor_id, n_slots)| {
+                ReservedTaskSlots::new_with_n(executor_id, n_slots)
+            })
+            .collect();
+
         let mut assignments: Vec<(String, TaskDescription)> = vec![];
         let mut pending_tasks = 0usize;
-        let mut assign_tasks = 0usize;
+        let mut offset = 0usize;
         for pairs in self.active_job_cache.iter() {
             let (_job_id, job_info) = pairs.pair();
             let mut graph = job_info.execution_graph.write().await;
-            for reservation in free_reservations.iter().skip(assign_tasks) {
-                if let Some(task) = graph.pop_next_task(&reservation.executor_id)? {
-                    assignments.push((reservation.executor_id.clone(), task));
-                    assign_tasks += 1;
+            for reservation in free_reservations.iter_mut().skip(offset) {
+                while reservation.n_slots > 0 {
+                    if let Some(task) = graph.pop_next_task(&reservation.executor_id)? {
+                        assignments.push((reservation.executor_id.clone(), task));
+                        reservation.n_slots -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                if reservation.n_slots == 0 {
+                    offset += 1;
                 } else {
                     break;
                 }
             }
-            if assign_tasks >= free_reservations.len() {
+            if offset >= free_reservations.len() {
                 pending_tasks += graph.available_tasks();
                 break;
             }
         }
 
         let mut unassigned = vec![];
-        for reservation in free_reservations.iter().skip(assign_tasks) {
+        for reservation in free_reservations.iter().skip(offset) {
             unassigned.push(reservation.clone());
         }
         Ok((assignments, unassigned, pending_tasks))

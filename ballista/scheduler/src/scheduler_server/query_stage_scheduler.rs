@@ -33,7 +33,7 @@ use tokio::sync::mpsc;
 
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 
-use crate::state::executor_manager::ExecutorReservation;
+use crate::state::executor_manager::ReservedTaskSlots;
 use crate::state::SchedulerState;
 
 pub(crate) struct QueryStageScheduler<
@@ -161,7 +161,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         .get_available_task_count(&job_id)
                         .await?;
 
-                    let reservations: Vec<ExecutorReservation> = self
+                    let reservations: Vec<ReservedTaskSlots> = self
                         .state
                         .executor_manager
                         .reserve_slots(available_tasks as u32)
@@ -287,7 +287,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         if self.state.config.is_push_staged_scheduling() {
                             tx_event
                                 .post_event(
-                                    QueryStageSchedulerEvent::ReservationOffering(offers),
+                                    QueryStageSchedulerEvent::ReservationOffering(vec![
+                                        offers,
+                                    ]),
                                 )
                                 .await?;
                         }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::state::executor_manager::ExecutorReservation;
+use crate::state::executor_manager::ReservedTaskSlots;
 
 use datafusion::logical_expr::LogicalPlan;
 
@@ -62,7 +62,7 @@ pub enum QueryStageSchedulerEvent {
     JobCancel(String),
     JobDataClean(String),
     TaskUpdating(String, Vec<TaskStatus>),
-    ReservationOffering(Vec<ExecutorReservation>),
+    ReservationOffering(Vec<ReservedTaskSlots>),
     ExecutorLost(String, Option<String>),
     CancelTasks(Vec<RunningTaskInfo>),
 }
