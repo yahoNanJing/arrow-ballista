@@ -26,6 +26,8 @@ use crate::cluster::ClusterState;
 use crate::config::SlotsPolicy;
 
 use crate::state::execution_graph::RunningTaskInfo;
+use ballista_core::consistent_hash;
+use ballista_core::consistent_hash::node::Node;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::protobuf::{
     executor_status, CancelTasksParams, ExecutorHeartbeat, ExecutorStatus,
@@ -36,7 +38,6 @@ use ballista_core::utils::create_grpc_client_connection;
 use dashmap::{DashMap, DashSet};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
-use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tonic::transport::Channel;
@@ -166,9 +167,9 @@ impl ExecutorManager {
     ) -> Self {
         let task_distribution = match slots_policy {
             SlotsPolicy::Bias => TaskDistribution::Bias,
-            SlotsPolicy::RoundRobin | SlotsPolicy::RoundRobinLocal => {
-                TaskDistribution::RoundRobin
-            }
+            SlotsPolicy::RoundRobin
+            | SlotsPolicy::RoundRobinLocal
+            | SlotsPolicy::ConsistentHash => TaskDistribution::RoundRobin,
         };
 
         Self {
@@ -404,7 +405,13 @@ impl ExecutorManager {
     }
 
     pub async fn save_executor_metadata(&self, metadata: ExecutorMetadata) -> Result<()> {
-        self.cluster_state.save_executor_metadata(metadata).await
+        self.cluster_state
+            .save_executor_metadata(metadata.clone())
+            .await?;
+        if self.slots_policy.is_local() {
+            self.executor_metadata.insert(metadata.id.clone(), metadata);
+        }
+        Ok(())
     }
 
     /// Register the executor with the scheduler. This will save the executor metadata and the
@@ -445,14 +452,15 @@ impl ExecutorManager {
         };
 
         if !reserve {
+            self.cluster_state
+                .register_executor(metadata.clone(), specification.clone(), reserve)
+                .await?;
+
             if self.slots_policy.is_local() {
                 self.executor_data
-                    .insert(specification.executor_id.clone(), specification.clone());
+                    .insert(specification.executor_id.clone(), specification);
+                self.executor_metadata.insert(metadata.id.clone(), metadata);
             }
-
-            self.cluster_state
-                .register_executor(metadata, specification.clone(), reserve)
-                .await?;
 
             self.executors_heartbeat
                 .insert(initial_heartbeat.executor_id.clone(), initial_heartbeat);
@@ -469,14 +477,15 @@ impl ExecutorManager {
 
             specification.available_task_slots = 0;
 
+            self.cluster_state
+                .register_executor(metadata.clone(), specification.clone(), reserve)
+                .await?;
+
             if self.slots_policy.is_local() {
                 self.executor_data
-                    .insert(specification.executor_id.clone(), specification.clone());
+                    .insert(specification.executor_id.clone(), specification);
+                self.executor_metadata.insert(metadata.id.clone(), metadata);
             }
-
-            self.cluster_state
-                .register_executor(metadata, specification, reserve)
-                .await?;
 
             self.executors_heartbeat
                 .insert(initial_heartbeat.executor_id.clone(), initial_heartbeat);
@@ -498,6 +507,10 @@ impl ExecutorManager {
 
         self.executors_heartbeat.remove(&executor_id);
 
+        // Remove executor metadata cache for dead executors
+        {
+            self.executor_metadata.remove(&executor_id);
+        }
         // Remove executor data cache for dead executors
         {
             self.executor_data.remove(&executor_id);
@@ -647,6 +660,78 @@ impl ExecutorManager {
             .checked_sub(Duration::from_secs(60))
             .unwrap_or_else(|| Duration::from_secs(0));
         self.get_alive_executors(last_seen_threshold.as_secs())
+    }
+
+    pub(crate) fn get_topology_nodes(&self) -> HashMap<String, TopologyNode> {
+        let mut nodes: HashMap<String, TopologyNode> = HashMap::new();
+        for executor in self.executor_metadata.iter() {
+            let available_slots = self
+                .executor_data
+                .get(&executor.id)
+                .map(|data| data.available_task_slots)
+                .unwrap_or(0);
+            let node = TopologyNode::new(
+                &executor.host,
+                executor.port,
+                &executor.id,
+                self.executors_heartbeat
+                    .get(&executor.id)
+                    .map(|heartbeat| heartbeat.timestamp)
+                    .unwrap_or(0),
+                available_slots,
+            );
+            if let Some(existing_node) = nodes.get(node.name()) {
+                if existing_node.last_seen_ts < node.last_seen_ts {
+                    nodes.insert(node.name().to_string(), node);
+                }
+            } else {
+                nodes.insert(node.name().to_string(), node);
+            }
+        }
+        nodes
+    }
+
+    pub(crate) fn update_with_topology_nodes(&self, nodes: Vec<&TopologyNode>) {
+        for node in nodes {
+            if let Some(mut data) = self.executor_data.get_mut(node.name()) {
+                data.available_task_slots = node.available_slots;
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TopologyNode {
+    pub id: String,
+    pub name: String,
+    pub last_seen_ts: u64,
+    pub available_slots: u32,
+}
+
+impl TopologyNode {
+    fn new(
+        host: &str,
+        port: u16,
+        id: &str,
+        last_seen_ts: u64,
+        available_slots: u32,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            name: format!("{host}:{port}"),
+            last_seen_ts,
+            available_slots,
+        }
+    }
+}
+
+impl consistent_hash::node::Node for TopologyNode {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn is_valid(&self) -> bool {
+        self.available_slots > 0
     }
 }
 

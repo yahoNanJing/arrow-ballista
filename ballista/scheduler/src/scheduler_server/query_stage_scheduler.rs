@@ -17,7 +17,6 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use log::{debug, error, info};
@@ -33,7 +32,6 @@ use tokio::sync::mpsc;
 
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 
-use crate::state::executor_manager::ReservedTaskSlots;
 use crate::state::SchedulerState;
 
 pub(crate) struct QueryStageScheduler<

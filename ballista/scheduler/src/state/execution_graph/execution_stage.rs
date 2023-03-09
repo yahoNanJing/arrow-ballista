@@ -233,19 +233,19 @@ pub(crate) struct FailedStage {
 #[derive(Clone)]
 pub(crate) struct TaskInfo {
     /// Task ID
-    pub(super) task_id: usize,
+    pub(crate) task_id: usize,
     /// Task scheduled time
-    pub(super) scheduled_time: u128,
+    pub(crate) scheduled_time: u128,
     /// Task launch time
-    pub(super) launch_time: u128,
+    pub(crate) launch_time: u128,
     /// Start execution time
-    pub(super) start_exec_time: u128,
+    pub(crate) start_exec_time: u128,
     /// Finish execution time
-    pub(super) end_exec_time: u128,
+    pub(crate) end_exec_time: u128,
     /// Task finish time
-    pub(super) finish_time: u128,
+    pub(crate) finish_time: u128,
     /// Task Status
-    pub(super) task_status: task_status::Status,
+    pub(crate) task_status: task_status::Status,
 }
 
 impl UnresolvedStage {

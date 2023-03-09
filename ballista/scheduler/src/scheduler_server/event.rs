@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::state::executor_manager::ReservedTaskSlots;
-
 use datafusion::logical_expr::LogicalPlan;
 
 use crate::state::execution_graph::RunningTaskInfo;

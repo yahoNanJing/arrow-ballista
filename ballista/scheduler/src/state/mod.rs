@@ -21,25 +21,28 @@ use datafusion::logical_expr::PlanVisitor;
 use std::any::type_name;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 
 use crate::state::executor_manager::{
-    total_task_slots, ExecutorManager, ReservedTaskSlots,
+    total_task_slots, ExecutorManager, ReservedTaskSlots, TopologyNode,
 };
 use crate::state::session_manager::SessionManager;
 use crate::state::task_manager::{TaskLauncher, TaskManager};
 
 use crate::cluster::BallistaCluster;
 use crate::config::{SchedulerConfig, SlotsPolicy};
-use crate::state::execution_graph::TaskDescription;
+use crate::state::execution_graph::{TaskDescription, TaskInfo};
+use ballista_core::consistent_hash;
+use ballista_core::consistent_hash::ConsistentHash;
 use ballista_core::error::{BallistaError, Result};
-use ballista_core::serde::protobuf::TaskStatus;
-use ballista_core::serde::scheduler::ExecutorData;
+use ballista_core::serde::protobuf::{task_status, RunningTask, TaskStatus};
+use ballista_core::serde::scheduler::PartitionId;
 use ballista_core::serde::BallistaCodec;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::file_format::get_scan_files;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
@@ -200,6 +203,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             SlotsPolicy::RoundRobinLocal => {
                 self.fetch_schedulable_tasks_local_round_robin().await
             }
+            SlotsPolicy::ConsistentHash => {
+                self.fetch_schedulable_tasks_consistent_hash().await
+            }
             _ => Err(BallistaError::General(format!(
                 "Reservation policy {:?} is not supported",
                 self.executor_manager.slots_policy
@@ -253,6 +259,211 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             }
         }
 
+        Ok((schedulable_tasks, pending_tasks))
+    }
+
+    async fn fetch_schedulable_tasks_consistent_hash(
+        &self,
+    ) -> Result<(Vec<(String, TaskDescription)>, usize)> {
+        let num_replicas = 20usize;
+        let tolerance = 3usize;
+
+        let topology_nodes = self.executor_manager.get_topology_nodes();
+        let mut total_slots = 0usize;
+        for (_, node) in topology_nodes.iter() {
+            total_slots += node.available_slots as usize;
+        }
+
+        let node_replicas = topology_nodes
+            .into_values()
+            .map(|node| (node.clone(), num_replicas))
+            .collect::<Vec<_>>();
+        let mut ch_topology: ConsistentHash<TopologyNode> =
+            consistent_hash::ConsistentHash::new(node_replicas);
+
+        let mut schedulable_tasks: Vec<(String, TaskDescription)> = vec![];
+        let mut pending_tasks = 0usize;
+        for pairs in self.task_manager.active_job_cache.iter() {
+            let (job_id, job_info) = pairs.pair();
+            let mut graph = job_info.execution_graph.write().await;
+            let session_id = graph.session_id().to_string();
+            if let Some((running_stage, task_id_gen)) = graph.fetch_running_stage() {
+                let stage_id = running_stage.stage_id;
+
+                let scan_files = get_scan_files(running_stage.plan.clone())?;
+                if scan_files.len() == 1 {
+                    let scan_files = &scan_files[0];
+                    // First round with 0 tolerance consistent hashing policy
+                    {
+                        if total_slots > 0 {
+                            let runnable_tasks = running_stage
+                                .task_infos
+                                .iter_mut()
+                                .enumerate()
+                                .filter(|(_partition, info)| info.is_none())
+                                .take(total_slots)
+                                .collect::<Vec<_>>();
+                            for (partition_id, task_info) in runnable_tasks {
+                                let partition_files = &scan_files[partition_id];
+                                assert!(!partition_files.is_empty());
+                                let partition_file = &partition_files[0];
+                                if let Some(node) = ch_topology.get_mut(
+                                    partition_file
+                                        .object_meta
+                                        .location
+                                        .as_ref()
+                                        .as_bytes(),
+                                ) {
+                                    let partition = PartitionId {
+                                        job_id: job_id.clone(),
+                                        stage_id,
+                                        partition_id,
+                                    };
+                                    let task_id = *task_id_gen;
+                                    *task_id_gen += 1;
+                                    let task_attempt =
+                                        running_stage.task_failure_numbers[partition_id];
+                                    *task_info = Some(TaskInfo {
+                                        task_id,
+                                        scheduled_time: SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_millis(),
+                                        // Those times will be updated when the task finish
+                                        launch_time: 0,
+                                        start_exec_time: 0,
+                                        end_exec_time: 0,
+                                        finish_time: 0,
+                                        task_status: task_status::Status::Running(
+                                            RunningTask {
+                                                executor_id: node.id.clone(),
+                                            },
+                                        ),
+                                    });
+                                    schedulable_tasks.push((
+                                        node.id.clone(),
+                                        TaskDescription {
+                                            session_id: session_id.clone(),
+                                            partition,
+                                            stage_attempt_num: running_stage
+                                                .stage_attempt_num,
+                                            task_id,
+                                            task_attempt,
+                                            plan: running_stage.plan.clone(),
+                                            output_partitioning: running_stage
+                                                .output_partitioning
+                                                .clone(),
+                                        },
+                                    ));
+
+                                    node.available_slots -= 1;
+                                    total_slots -= 1;
+                                }
+                            }
+                        }
+                    }
+                    // Second round with 3 tolerance consistent hashing policy
+                    {
+                        if total_slots > 0 {
+                            let runnable_tasks = running_stage
+                                .task_infos
+                                .iter_mut()
+                                .enumerate()
+                                .filter(|(_partition, info)| info.is_none())
+                                .take(total_slots)
+                                .collect::<Vec<_>>();
+                            for (partition_id, task_info) in runnable_tasks {
+                                let partition_files = &scan_files[partition_id];
+                                assert!(!partition_files.is_empty());
+                                let partition_file = &partition_files[0];
+                                if let Some(node) = ch_topology.get_mut_with_tolerance(
+                                    partition_file
+                                        .object_meta
+                                        .location
+                                        .as_ref()
+                                        .as_bytes(),
+                                    tolerance,
+                                ) {
+                                    let partition = PartitionId {
+                                        job_id: job_id.clone(),
+                                        stage_id,
+                                        partition_id,
+                                    };
+                                    let task_id = *task_id_gen;
+                                    *task_id_gen += 1;
+                                    let task_attempt =
+                                        running_stage.task_failure_numbers[partition_id];
+                                    *task_info = Some(TaskInfo {
+                                        task_id,
+                                        scheduled_time: SystemTime::now()
+                                            .duration_since(UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_millis(),
+                                        // Those times will be updated when the task finish
+                                        launch_time: 0,
+                                        start_exec_time: 0,
+                                        end_exec_time: 0,
+                                        finish_time: 0,
+                                        task_status: task_status::Status::Running(
+                                            RunningTask {
+                                                executor_id: node.id.clone(),
+                                            },
+                                        ),
+                                    });
+                                    schedulable_tasks.push((
+                                        node.id.clone(),
+                                        TaskDescription {
+                                            session_id: session_id.clone(),
+                                            partition,
+                                            stage_attempt_num: running_stage
+                                                .stage_attempt_num,
+                                            task_id,
+                                            task_attempt,
+                                            plan: running_stage.plan.clone(),
+                                            output_partitioning: running_stage
+                                                .output_partitioning
+                                                .clone(),
+                                        },
+                                    ));
+
+                                    node.available_slots -= 1;
+                                    total_slots -= 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                if total_slots == 0 {
+                    break;
+                }
+                let mut nodes = ch_topology.nodes_mut();
+                nodes.sort_by(|a, b| Ord::cmp(&b.available_slots, &a.available_slots));
+                let mut offset = 0usize;
+                for node in nodes.iter_mut().skip(offset) {
+                    while node.available_slots > 0 {
+                        if let Some(task) = graph.pop_next_task(&node.id)? {
+                            schedulable_tasks.push((node.id.clone(), task));
+                            node.available_slots -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if node.available_slots == 0 {
+                        offset += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if offset >= nodes.len() {
+                    pending_tasks += graph.available_tasks();
+                    break;
+                }
+            }
+        }
+
+        // Update executor slots
+        self.executor_manager
+            .update_with_topology_nodes(ch_topology.nodes());
         Ok((schedulable_tasks, pending_tasks))
     }
 

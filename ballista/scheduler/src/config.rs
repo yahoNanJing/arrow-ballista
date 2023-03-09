@@ -168,11 +168,13 @@ pub enum SlotsPolicy {
     Bias,
     RoundRobin,
     RoundRobinLocal,
+    ConsistentHash,
 }
 
 impl SlotsPolicy {
     pub fn is_local(&self) -> bool {
         matches!(self, SlotsPolicy::RoundRobinLocal)
+            || matches!(self, SlotsPolicy::ConsistentHash)
     }
 }
 
