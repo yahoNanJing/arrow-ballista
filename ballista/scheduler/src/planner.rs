@@ -26,7 +26,12 @@ use ballista_core::{
     serde::scheduler::PartitionLocation,
 };
 use datafusion::common::DataFusionError;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::physical_plan::file_format::{
+    AvroExec, CsvExec, FileScanConfig, NdJsonExec, ParquetExec,
+};
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::rewrite::TreeNodeRewriter;
 use datafusion::physical_plan::windows::WindowAggExec;
 use datafusion::physical_plan::{
     need_data_exchange, with_new_children_if_necessary, ExecutionPlan, Partitioning,
@@ -299,6 +304,42 @@ fn create_shuffle_writer(
         "".to_owned(), // executor will decide on the work_dir path
         partitioning,
     )?))
+}
+
+pub struct ScanFileCollector {
+    pub scan_files: Vec<Vec<Vec<PartitionedFile>>>,
+}
+
+impl ScanFileCollector {
+    pub fn new() -> Self {
+        Self { scan_files: vec![] }
+    }
+}
+
+impl TreeNodeRewriter<Arc<dyn ExecutionPlan>> for ScanFileCollector {
+    fn mutate(
+        &mut self,
+        node: Arc<dyn ExecutionPlan>,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        let plan_any = node.as_any();
+        let file_groups =
+            if let Some(parquet_exec) = plan_any.downcast_ref::<ParquetExec>() {
+                Some(parquet_exec.base_config().file_groups.clone())
+            } else if let Some(avro_exec) = plan_any.downcast_ref::<AvroExec>() {
+                Some(avro_exec.base_config().file_groups.clone())
+            } else if let Some(json_exec) = plan_any.downcast_ref::<NdJsonExec>() {
+                // TODO
+                None
+            } else if let Some(csv_exec) = plan_any.downcast_ref::<CsvExec>() {
+                Some(csv_exec.base_config().file_groups.clone())
+            } else {
+                None
+            };
+        if let Some(file_groups) = file_groups {
+            self.scan_files.push(file_groups);
+        }
+        Ok(node)
+    }
 }
 
 #[cfg(test)]
