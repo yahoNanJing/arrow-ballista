@@ -40,7 +40,12 @@ use uuid::Uuid;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_proto::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 
-use ballista_core::config::{LogRotationPolicy, TaskSchedulingPolicy};
+use ballista_core::cache_layer::{
+    medium::local_disk::LocalDiskMedium, policy::file::FileCacheLayer, CacheLayer,
+};
+use ballista_core::config::{
+    LogRotationPolicy, SourceDataCachePolicy, TaskSchedulingPolicy,
+};
 use ballista_core::error::BallistaError;
 use ballista_core::serde::protobuf::executor_resource::Resource;
 use ballista_core::serde::protobuf::executor_status::Status;
@@ -51,7 +56,8 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::{
-    create_grpc_client_connection, create_grpc_server, with_object_store_provider,
+    create_grpc_client_connection, create_grpc_server, with_cache_layer,
+    with_object_store_registry,
 };
 use ballista_core::BALLISTA_VERSION;
 
@@ -85,6 +91,9 @@ pub struct ExecutorProcessConfig {
     pub log_clean_up_ttl: u64,
     pub job_data_ttl_seconds: u64,
     pub job_data_clean_up_interval_seconds: u64,
+    pub source_data_cache_policy: Option<SourceDataCachePolicy>,
+    pub cache_dir: Option<String>,
+    pub cache_capacity: u64,
     /// Optional execution engine to use to execute physical plans, will default to
     /// DataFusion if none is provided.
     pub execution_engine: Option<Arc<dyn ExecutionEngine>>,
@@ -179,9 +188,27 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         }),
     };
 
-    let config = with_object_store_provider(
-        RuntimeConfig::new().with_temp_file_path(work_dir.clone()),
-    );
+    let cache_dir = opt.cache_dir;
+    let cache_capacity = opt.cache_capacity;
+    let cache_layer: Option<CacheLayer> =
+        opt.source_data_cache_policy
+            .map(|source_data_cache_policy| match source_data_cache_policy {
+                SourceDataCachePolicy::LocalDiskFile => {
+                    let cache_dir = cache_dir.unwrap();
+                    let cache_layer = FileCacheLayer::new(
+                        cache_capacity as usize,
+                        LocalDiskMedium::new(cache_dir),
+                    );
+                    CacheLayer::LocalDiskFile(Arc::new(cache_layer))
+                }
+            });
+
+    let config = RuntimeConfig::new().with_temp_file_path(work_dir.clone());
+    let config = if let Some(cache_layer) = cache_layer {
+        with_cache_layer(config, cache_layer)
+    } else {
+        with_object_store_registry(config)
+    };
     let runtime = Arc::new(RuntimeEnv::new(config).map_err(|_| {
         BallistaError::Internal("Failed to init Executor RuntimeEnv".to_owned())
     })?);
