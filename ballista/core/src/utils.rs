@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache_layer::object_store::file::FileCacheObjectStore;
+use crate::cache_layer::object_store::ObjectStoreWithKey;
+use crate::cache_layer::CacheLayer;
 use crate::config::BallistaConfig;
 use crate::error::{BallistaError, Result};
 use crate::execution_plans::{
@@ -81,8 +84,14 @@ pub fn default_session_builder(config: SessionConfig) -> SessionState {
 
 /// Get a RuntimeConfig with specific ObjectStoreRegistry
 pub fn with_object_store_registry(config: RuntimeConfig) -> RuntimeConfig {
-    config
-        .with_object_store_registry(Arc::new(FeatureBasedObjectStoreRegistry::default()))
+    let registry = Arc::new(FeatureBasedObjectStoreRegistry::default());
+    config.with_object_store_registry(registry)
+}
+
+pub fn with_cache_layer(config: RuntimeConfig, cache_layer: CacheLayer) -> RuntimeConfig {
+    let registry = Arc::new(FeatureBasedObjectStoreRegistry::default());
+    let registry = Arc::new(CachedBasedObjectStoreRegistry::new(registry, cache_layer));
+    config.with_object_store_registry(registry)
 }
 
 /// The inner [`DefaultObjectStoreRegistry`] can be used as cache for the existing registration.
@@ -167,6 +176,60 @@ impl ObjectStoreRegistry for FeatureBasedObjectStoreRegistry {
             Ok(store)
         })
     }
+}
+
+/// An object store registry wrapped an existing one with a cache layer.
+///
+/// During [`get_store`], after getting the source [`ObjectStore`], it will firstly
+/// be wrapped with the [`cache_layer`] and then be wrapped with a key based on the url
+/// which will be used as the cache prefix path
+#[derive(Debug)]
+pub struct CachedBasedObjectStoreRegistry {
+    inner: Arc<dyn ObjectStoreRegistry>,
+    cache_layer: CacheLayer,
+}
+
+impl CachedBasedObjectStoreRegistry {
+    pub fn new(inner: Arc<dyn ObjectStoreRegistry>, cache_layer: CacheLayer) -> Self {
+        Self { inner, cache_layer }
+    }
+}
+
+impl ObjectStoreRegistry for CachedBasedObjectStoreRegistry {
+    fn register_store(
+        &self,
+        url: &Url,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.inner.register_store(url, store)
+    }
+
+    fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
+        let source_object_store = self.inner.get_store(url)?;
+        let cache_store: Arc<dyn ObjectStore> = match &self.cache_layer {
+            CacheLayer::LocalDiskFile(cache_layer) => Arc::new(
+                FileCacheObjectStore::new(cache_layer.clone(), source_object_store),
+            ),
+            CacheLayer::LocalMemoryFile(cache_layer) => Arc::new(
+                FileCacheObjectStore::new(cache_layer.clone(), source_object_store),
+            ),
+        };
+
+        Ok(Arc::new(ObjectStoreWithKey::new(
+            get_url_key(url),
+            cache_store,
+        )))
+    }
+}
+
+/// Get the key of a url for object store cache prefix path.
+/// The credential info will be removed.
+fn get_url_key(url: &Url) -> String {
+    format!(
+        "{}://{}",
+        url.scheme(),
+        &url[url::Position::BeforeHost..url::Position::AfterPort],
+    )
 }
 
 /// Stream data to disk in Arrow IPC format

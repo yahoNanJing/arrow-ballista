@@ -137,3 +137,19 @@ name = "log_clean_up_ttl"
 type = "u64"
 doc = "Log ttl in seconds. Default: one day"
 default = "86400"
+
+[[param]]
+name = "source_data_cache_policy"
+type = "ballista_core::config::SourceDataCachePolicy"
+doc = "Source data cache policy, possible values: local-disk-file"
+
+[[param]]
+name = "cache_dir"
+type = "String"
+doc = "Directory for cached source data"
+
+[[param]]
+name = "cache_capacity"
+type = "u64"
+doc = "The maximum capacity can be used for cache. Default: 1GB"
+default = "1073741824"
