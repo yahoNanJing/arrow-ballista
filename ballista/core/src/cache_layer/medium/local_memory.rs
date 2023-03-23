@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::cache_layer::medium::CacheMedium;
-use crate::cache_layer::object_store::get_key;
+use crate::cache_layer::object_store::ObjectStoreWithKey;
 use object_store::memory::InMemory;
 use object_store::path::{Path, DELIMITER};
 use object_store::ObjectStore;
@@ -61,12 +61,12 @@ impl CacheMedium for LocalMemoryMedium {
     fn get_mapping_location(
         &self,
         source_location: &Path,
-        source_object_store: Arc<dyn ObjectStore>,
+        source_object_store: &ObjectStoreWithKey,
     ) -> Path {
-        let store_prefix = get_key(source_object_store.clone());
         let cache_location = format!(
-            "{}{DELIMITER}{store_prefix}{DELIMITER}{source_location}",
-            "memory"
+            "{}{DELIMITER}{}{DELIMITER}{source_location}",
+            "memory",
+            source_object_store.key(),
         );
         Path::from(cache_location)
     }

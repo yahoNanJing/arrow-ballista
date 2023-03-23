@@ -22,21 +22,10 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
-use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-
-/// Get the registration key for the [`ObjectStore`], which will be used as the cache prefix path.
-pub fn get_key(store: Arc<dyn ObjectStore>) -> String {
-    let store_any = &store as &dyn Any;
-    if let Some(store_with_key) = store_any.downcast_ref::<ObjectStoreWithKey>() {
-        store_with_key.key.clone()
-    } else {
-        "none".to_string()
-    }
-}
 
 /// An [`ObjectStore`] wrapper with a specific key which is used for registration in [`ObjectStoreRegistry`].
 ///
@@ -152,24 +141,5 @@ impl ObjectStore for ObjectStoreWithKey {
         to: &Path,
     ) -> object_store::Result<()> {
         self.inner.rename_if_not_exists(from, to).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::cache_layer::object_store::{get_key, ObjectStoreWithKey};
-    use object_store::local::LocalFileSystem;
-    use std::sync::Arc;
-
-    #[test]
-    fn test_get_object_store_key() {
-        let store = Arc::new(LocalFileSystem::new());
-        assert_eq!("none", get_key(store.clone()));
-
-        let store = Arc::new(ObjectStoreWithKey::new("file".to_string(), store.clone()));
-        assert_eq!("file", get_key(store.clone()));
-
-        let store = Arc::new(ObjectStoreWithKey::new("file1".to_string(), store.clone()));
-        assert_eq!("file1", get_key(store));
     }
 }

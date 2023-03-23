@@ -17,6 +17,7 @@
 
 use crate::cache_layer::medium::local_disk::LocalDiskMedium;
 use crate::cache_layer::medium::CacheMedium;
+use crate::cache_layer::object_store::ObjectStoreWithKey;
 use crate::error::{BallistaError, Result};
 use async_trait::async_trait;
 use ballista_cache::backend::policy::lru::hashlink::lru_cache::LruCache;
@@ -126,7 +127,7 @@ where
 async fn load_object<M>(
     cache_medium: Arc<M>,
     source_location: Path,
-    source_store: Arc<dyn ObjectStore>,
+    source_store: &ObjectStoreWithKey,
 ) -> Result<ObjectMeta>
 where
     M: CacheMedium,
@@ -139,7 +140,7 @@ where
 
     let cache_store = cache_medium.get_object_store();
     let cache_location =
-        cache_medium.get_mapping_location(&source_location, source_store.clone());
+        cache_medium.get_mapping_location(&source_location, source_store);
 
     // Check whether the cache location exist or not. If exists, delete it first.
     if cache_store.head(&cache_location).await.is_ok() {
@@ -238,10 +239,10 @@ where
 {
     type K = Path;
     type V = ObjectMeta;
-    type Extra = Arc<dyn ObjectStore>;
+    type Extra = Arc<ObjectStoreWithKey>;
 
     async fn load(&self, source_location: Self::K, source_store: Self::Extra) -> Self::V {
-        match load_object(self.cache_medium.clone(), source_location, source_store).await
+        match load_object(self.cache_medium.clone(), source_location, &source_store).await
         {
             Ok(object_meta) => object_meta,
             Err(e) => panic!("{}", e),

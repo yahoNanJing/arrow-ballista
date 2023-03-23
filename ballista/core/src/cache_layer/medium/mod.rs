@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache_layer::object_store::ObjectStoreWithKey;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use std::any::Any;
@@ -36,6 +37,6 @@ pub trait CacheMedium: Debug + Send + Sync + Display + 'static {
     fn get_mapping_location(
         &self,
         source_location: &Path,
-        source_object_store: Arc<dyn ObjectStore>,
+        source_object_store: &ObjectStoreWithKey,
     ) -> Path;
 }

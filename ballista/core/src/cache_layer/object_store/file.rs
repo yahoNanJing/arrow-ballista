@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::cache_layer::medium::CacheMedium;
+use crate::cache_layer::object_store::ObjectStoreWithKey;
 use crate::cache_layer::policy::file::FileCacheLayer;
 use crate::error::BallistaError;
 use async_trait::async_trait;
@@ -35,14 +36,17 @@ where
     M: CacheMedium,
 {
     cache_layer: Arc<FileCacheLayer<M>>,
-    inner: Arc<dyn ObjectStore>,
+    inner: Arc<ObjectStoreWithKey>,
 }
 
 impl<M> FileCacheObjectStore<M>
 where
     M: CacheMedium,
 {
-    pub fn new(cache_layer: Arc<FileCacheLayer<M>>, inner: Arc<dyn ObjectStore>) -> Self {
+    pub fn new(
+        cache_layer: Arc<FileCacheLayer<M>>,
+        inner: Arc<ObjectStoreWithKey>,
+    ) -> Self {
         Self { cache_layer, inner }
     }
 }

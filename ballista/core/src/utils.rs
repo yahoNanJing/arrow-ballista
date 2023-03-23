@@ -180,9 +180,9 @@ impl ObjectStoreRegistry for FeatureBasedObjectStoreRegistry {
 
 /// An object store registry wrapped an existing one with a cache layer.
 ///
-/// During [`get_store`], after getting the source [`ObjectStore`], it will firstly
-/// be wrapped with the [`cache_layer`] and then be wrapped with a key based on the url
-/// which will be used as the cache prefix path
+/// During [`get_store`], after getting the source [`ObjectStore`], based on the url,
+/// it will firstly be wrapped with a key which will be used as the cache prefix path.
+/// And then it will be wrapped with the [`cache_layer`].
 #[derive(Debug)]
 pub struct CachedBasedObjectStoreRegistry {
     inner: Arc<dyn ObjectStoreRegistry>,
@@ -206,19 +206,18 @@ impl ObjectStoreRegistry for CachedBasedObjectStoreRegistry {
 
     fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
         let source_object_store = self.inner.get_store(url)?;
-        let cache_store: Arc<dyn ObjectStore> = match &self.cache_layer {
+        let object_store_with_key = Arc::new(ObjectStoreWithKey::new(
+            get_url_key(url),
+            source_object_store,
+        ));
+        Ok(match &self.cache_layer {
             CacheLayer::LocalDiskFile(cache_layer) => Arc::new(
-                FileCacheObjectStore::new(cache_layer.clone(), source_object_store),
+                FileCacheObjectStore::new(cache_layer.clone(), object_store_with_key),
             ),
             CacheLayer::LocalMemoryFile(cache_layer) => Arc::new(
-                FileCacheObjectStore::new(cache_layer.clone(), source_object_store),
+                FileCacheObjectStore::new(cache_layer.clone(), object_store_with_key),
             ),
-        };
-
-        Ok(Arc::new(ObjectStoreWithKey::new(
-            get_url_key(url),
-            cache_store,
-        )))
+        })
     }
 }
 
@@ -226,9 +225,10 @@ impl ObjectStoreRegistry for CachedBasedObjectStoreRegistry {
 /// The credential info will be removed.
 fn get_url_key(url: &Url) -> String {
     format!(
-        "{}://{}",
+        "{}_{}_{}",
         url.scheme(),
-        &url[url::Position::BeforeHost..url::Position::AfterPort],
+        &url[url::Position::BeforeHost..url::Position::AfterHost],
+        &url[url::Position::BeforePort..url::Position::AfterPort],
     )
 }
 
