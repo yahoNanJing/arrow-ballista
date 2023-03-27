@@ -36,7 +36,6 @@ use ballista_core::utils::create_grpc_client_connection;
 use dashmap::{DashMap, DashSet};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
-use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tonic::transport::Channel;
@@ -146,16 +145,10 @@ pub const EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS: u64 = 15;
 
 #[derive(Clone)]
 pub struct ExecutorManager {
-    // executor slot policy
-    slots_policy: SlotsPolicy,
     task_distribution: TaskDistribution,
     cluster_state: Arc<dyn ClusterState>,
-    // executor_id -> ExecutorMetadata map
-    executor_metadata: Arc<DashMap<String, ExecutorMetadata>>,
     // executor_id -> ExecutorHeartbeat map
-    executors_heartbeat: Arc<DashMap<String, protobuf::ExecutorHeartbeat>>,
-    // executor_id -> ExecutorData map, only used when the slots policy is of local
-    executor_data: Arc<Mutex<HashMap<String, ExecutorData>>>,
+    executors_heartbeat: Arc<DashMap<String, ExecutorHeartbeat>>,
     // dead executor sets:
     dead_executors: Arc<DashSet<String>>,
     clients: ExecutorClients,
@@ -174,12 +167,9 @@ impl ExecutorManager {
         };
 
         Self {
-            slots_policy,
             task_distribution,
             cluster_state,
-            executor_metadata: Arc::new(DashMap::new()),
             executors_heartbeat: Arc::new(DashMap::new()),
-            executor_data: Arc::new(Mutex::new(HashMap::new())),
             dead_executors: Arc::new(DashSet::new()),
             clients: Default::default(),
         }
@@ -223,87 +213,13 @@ impl ExecutorManager {
     /// for scheduling.
     /// This operation is atomic, so if this method return an Err, no slots have been reserved.
     pub async fn reserve_slots(&self, n: u32) -> Result<Vec<ExecutorReservation>> {
-        if self.slots_policy.is_local() {
-            self.reserve_slots_local(n).await
-        } else {
-            let alive_executors = self.get_alive_executors_within_one_minute();
-
-            debug!("Alive executors: {alive_executors:?}");
-
-            self.cluster_state
-                .reserve_slots(n, self.task_distribution, Some(alive_executors))
-                .await
-        }
-    }
-
-    async fn reserve_slots_local(&self, n: u32) -> Result<Vec<ExecutorReservation>> {
-        debug!("Attempting to reserve {} executor slots", n);
-
         let alive_executors = self.get_alive_executors_within_one_minute();
 
-        match self.slots_policy {
-            SlotsPolicy::RoundRobinLocal => {
-                self.reserve_slots_local_round_robin(n, alive_executors)
-                    .await
-            }
-            _ => Err(BallistaError::General(format!(
-                "Reservation policy {:?} is not supported",
-                self.slots_policy
-            ))),
-        }
-    }
+        debug!("Alive executors: {alive_executors:?}");
 
-    /// Create ExecutorReservation in a round robin way to evenly assign tasks to executors
-    async fn reserve_slots_local_round_robin(
-        &self,
-        mut n: u32,
-        alive_executors: HashSet<String>,
-    ) -> Result<Vec<ExecutorReservation>> {
-        let mut executor_data = self.executor_data.lock();
-
-        let mut available_executor_data: Vec<&mut ExecutorData> = executor_data
-            .values_mut()
-            .filter_map(|data| {
-                (data.available_task_slots > 0
-                    && alive_executors.contains(&data.executor_id))
-                .then_some(data)
-            })
-            .collect();
-        available_executor_data
-            .sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
-
-        let mut reservations: Vec<ExecutorReservation> = vec![];
-
-        // Exclusive
-        let mut last_updated_idx = 0usize;
-        loop {
-            let n_before = n;
-            for (idx, data) in available_executor_data.iter_mut().enumerate() {
-                if n == 0 {
-                    break;
-                }
-
-                // Since the vector is sorted in descending order,
-                // if finding one executor has not enough slots, the following will have not enough, either
-                if data.available_task_slots == 0 {
-                    break;
-                }
-
-                reservations.push(ExecutorReservation::new(data.executor_id.clone()));
-                data.available_task_slots -= 1;
-                n -= 1;
-
-                if idx >= last_updated_idx {
-                    last_updated_idx = idx + 1;
-                }
-            }
-
-            if n_before == n {
-                break;
-            }
-        }
-
-        Ok(reservations)
+        self.cluster_state
+            .reserve_slots(n, self.task_distribution, Some(alive_executors))
+            .await
     }
 
     /// Returned reserved task slots to the pool of available slots. This operation is atomic
@@ -312,29 +228,7 @@ impl ExecutorManager {
         &self,
         reservations: Vec<ExecutorReservation>,
     ) -> Result<()> {
-        if self.slots_policy.is_local() {
-            self.cancel_reservations_local(reservations).await
-        } else {
-            self.cluster_state.cancel_reservations(reservations).await
-        }
-    }
-
-    async fn cancel_reservations_local(
-        &self,
-        reservations: Vec<ExecutorReservation>,
-    ) -> Result<()> {
-        let executor_slots = coalesce_task_slots(reservations.as_slice());
-
-        let mut executor_data = self.executor_data.lock();
-        for (id, released_slots) in executor_slots.into_iter() {
-            if let Some(slots) = executor_data.get_mut(&id) {
-                slots.available_task_slots += released_slots as u32;
-            } else {
-                warn!("ExecutorData for {} is not cached in memory", id);
-            }
-        }
-
-        Ok(())
+        self.cluster_state.cancel_reservations(reservations).await
     }
 
     /// Send rpc to Executors to cancel the running tasks
@@ -484,12 +378,6 @@ impl ExecutorManager {
         &self,
         executor_id: &str,
     ) -> Result<ExecutorMetadata> {
-        {
-            if let Some(cached) = self.executor_metadata.get(executor_id) {
-                return Ok(cached.clone());
-            }
-        }
-
         self.cluster_state.get_executor_metadata(executor_id).await
     }
 
@@ -535,12 +423,6 @@ impl ExecutorManager {
         };
 
         if !reserve {
-            if self.slots_policy.is_local() {
-                let mut executor_data = self.executor_data.lock();
-                executor_data
-                    .insert(specification.executor_id.clone(), specification.clone());
-            }
-
             self.cluster_state
                 .register_executor(metadata, specification.clone(), reserve)
                 .await?;
@@ -559,12 +441,6 @@ impl ExecutorManager {
                 )];
 
             specification.available_task_slots = 0;
-
-            if self.slots_policy.is_local() {
-                let mut executor_data = self.executor_data.lock();
-                executor_data
-                    .insert(specification.executor_id.clone(), specification.clone());
-            }
 
             self.cluster_state
                 .register_executor(metadata, specification, reserve)
@@ -589,12 +465,6 @@ impl ExecutorManager {
         let executor_id = executor_id.to_owned();
 
         self.executors_heartbeat.remove(&executor_id);
-
-        // Remove executor data cache for dead executors
-        {
-            let mut executor_data = self.executor_data.lock();
-            executor_data.remove(&executor_id);
-        }
 
         self.dead_executors.insert(executor_id);
 
