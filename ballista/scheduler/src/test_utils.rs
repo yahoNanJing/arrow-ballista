@@ -55,7 +55,6 @@ use datafusion::test_util::scan_empty;
 use crate::cluster::BallistaCluster;
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 
-use crate::scheduler_server::query_stage_scheduler::QueryStageScheduler;
 use crate::state::execution_graph::{ExecutionGraph, TaskDescription};
 use ballista_core::utils::default_session_builder;
 use datafusion_proto::protobuf::{LogicalPlanNode, PhysicalPlanNode};
@@ -457,7 +456,7 @@ impl SchedulerTest {
             scheduler
                 .state
                 .executor_manager
-                .register_executor(metadata, executor_data, false)
+                .register_executor(metadata, executor_data)
                 .await?;
         }
 
@@ -466,10 +465,6 @@ impl SchedulerTest {
             ballista_config,
             status_receiver: Some(status_receiver),
         })
-    }
-
-    pub fn pending_tasks(&self) -> usize {
-        self.scheduler.pending_tasks()
     }
 
     pub async fn ctx(&self) -> Result<Arc<SessionContext>> {
@@ -660,12 +655,6 @@ impl SchedulerTest {
         };
 
         final_status
-    }
-
-    pub(crate) fn query_stage_scheduler(
-        &self,
-    ) -> Arc<QueryStageScheduler<LogicalPlanNode, PhysicalPlanNode>> {
-        self.scheduler.query_stage_scheduler()
     }
 }
 

@@ -50,6 +50,7 @@ use crate::display::print_stage_metrics;
 use crate::planner::DistributedPlanner;
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 use crate::scheduler_server::timestamp_millis;
+use crate::state::execution_graph::execution_stage::RunningStage;
 pub(crate) use crate::state::execution_graph::execution_stage::{
     ExecutionStage, FailedStage, ResolvedStage, StageOutput, SuccessfulStage, TaskInfo,
     UnresolvedStage,
@@ -933,6 +934,61 @@ impl ExecutionGraph {
         Ok(next_task)
     }
 
+    pub(crate) fn fetch_running_stage(
+        &mut self,
+    ) -> Option<(&mut RunningStage, &mut usize)> {
+        if matches!(
+            self.status,
+            JobStatus {
+                status: Some(job_status::Status::Failed(_)),
+                ..
+            }
+        ) {
+            warn!("Call fetch_runnable_stage on failed Job");
+            return None;
+        }
+
+        let running_stage_id = self.get_running_stage_id();
+        if let Some(running_stage_id) = running_stage_id {
+            if let Some(ExecutionStage::Running(running_stage)) =
+                self.stages.get_mut(&running_stage_id)
+            {
+                Some((running_stage, &mut self.task_id_gen))
+            } else {
+                warn!("Fail to find running stage with id {running_stage_id}");
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    fn get_running_stage_id(&mut self) -> Option<usize> {
+        let mut running_stage_id = self.stages.iter().find_map(|(stage_id, stage)| {
+            if let ExecutionStage::Running(stage) = stage {
+                if stage.available_tasks() > 0 {
+                    Some(*stage_id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
+        // If no available tasks found in the running stage,
+        // try to find a resolved stage and convert it to the running stage
+        if running_stage_id.is_none() {
+            if self.revive() {
+                running_stage_id = self.get_running_stage_id();
+            } else {
+                running_stage_id = None;
+            }
+        }
+
+        running_stage_id
+    }
+
     pub fn update_status(&mut self, status: JobStatus) {
         self.status = status;
     }
@@ -1417,6 +1473,22 @@ impl ExecutionGraph {
             task_id_gen: graph.task_id_gen as u32,
             failed_attempts,
         })
+    }
+}
+
+pub(crate) fn create_task_info(executor_id: String, task_id: usize) -> TaskInfo {
+    TaskInfo {
+        task_id,
+        scheduled_time: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+        // Those times will be updated when the task finish
+        launch_time: 0,
+        start_exec_time: 0,
+        end_exec_time: 0,
+        finish_time: 0,
+        task_status: task_status::Status::Running(RunningTask { executor_id }),
     }
 }
 

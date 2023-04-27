@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::state::executor_manager::ExecutorReservation;
 use std::fmt::{Debug, Formatter};
 
 use datafusion::logical_expr::LogicalPlan;
@@ -38,7 +37,6 @@ pub enum QueryStageSchedulerEvent {
         job_id: String,
         queued_at: u64,
         submitted_at: u64,
-        resubmit: bool,
     },
     // For a job which failed during planning
     JobPlanningFailed {
@@ -63,7 +61,7 @@ pub enum QueryStageSchedulerEvent {
     JobCancel(String),
     JobDataClean(String),
     TaskUpdating(String, Vec<TaskStatus>),
-    ReservationOffering(Vec<ExecutorReservation>),
+    ReviveOffers,
     ExecutorLost(String, Option<String>),
     CancelTasks(Vec<RunningTaskInfo>),
 }
@@ -123,8 +121,8 @@ impl Debug for QueryStageSchedulerEvent {
             QueryStageSchedulerEvent::TaskUpdating(job_id, status) => {
                 write!(f, "TaskUpdating : job_id={job_id}, status:[{status:?}].")
             }
-            QueryStageSchedulerEvent::ReservationOffering(reservations) => {
-                write!(f, "ReservationOffering : reservations:[{reservations:?}].")
+            QueryStageSchedulerEvent::ReviveOffers => {
+                write!(f, "ReviveOffers.")
             }
             QueryStageSchedulerEvent::ExecutorLost(job_id, reason) => {
                 write!(f, "ExecutorLost : job_id={job_id}, reason:[{reason:?}].")

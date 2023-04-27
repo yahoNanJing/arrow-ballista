@@ -17,7 +17,7 @@
 
 use crate::scheduler_server::externalscaler::{
     external_scaler_server::ExternalScaler, GetMetricSpecResponse, GetMetricsRequest,
-    GetMetricsResponse, IsActiveResponse, MetricSpec, MetricValue, ScaledObjectRef,
+    GetMetricsResponse, IsActiveResponse, MetricSpec, ScaledObjectRef,
 };
 use crate::scheduler_server::SchedulerServer;
 use datafusion_proto::logical_plan::AsLogicalPlan;
@@ -55,10 +55,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExternalScaler
         _request: Request<GetMetricsRequest>,
     ) -> Result<Response<GetMetricsResponse>, tonic::Status> {
         Ok(Response::new(GetMetricsResponse {
-            metric_values: vec![MetricValue {
-                metric_name: INFLIGHT_TASKS_METRIC_NAME.to_string(),
-                metric_value: self.pending_tasks() as i64,
-            }],
+            metric_values: vec![],
         }))
     }
 }

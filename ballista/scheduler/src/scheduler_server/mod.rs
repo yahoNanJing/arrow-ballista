@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ballista_core::error::Result;
 use ballista_core::event_loop::{EventLoop, EventSender};
-use ballista_core::serde::protobuf::{StopExecutorParams, TaskStatus};
+use ballista_core::serde::protobuf::TaskStatus;
 use ballista_core::serde::BallistaCodec;
 
 use datafusion::execution::context::SessionState;
@@ -39,8 +39,7 @@ use crate::scheduler_server::event::QueryStageSchedulerEvent;
 use crate::scheduler_server::query_stage_scheduler::QueryStageScheduler;
 
 use crate::state::executor_manager::{
-    ExecutorManager, ExecutorReservation, DEFAULT_EXECUTOR_TIMEOUT_SECONDS,
-    EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS,
+    ExecutorManager, DEFAULT_EXECUTOR_TIMEOUT_SECONDS, EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS,
 };
 
 use crate::state::task_manager::TaskLauncher;
@@ -86,7 +85,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         let query_stage_scheduler = Arc::new(QueryStageScheduler::new(
             state.clone(),
             metrics_collector,
-            config.job_resubmit_interval_ms,
             config.scheduler_event_expected_processing_duration,
         ));
         let query_stage_event_loop = EventLoop::new(
@@ -124,7 +122,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         let query_stage_scheduler = Arc::new(QueryStageScheduler::new(
             state.clone(),
             metrics_collector,
-            config.job_resubmit_interval_ms,
             config.scheduler_event_expected_processing_duration,
         ));
         let query_stage_event_loop = EventLoop::new(
@@ -149,15 +146,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         self.expire_dead_executors()?;
 
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn query_stage_scheduler(&self) -> Arc<QueryStageScheduler<T, U>> {
-        self.query_stage_scheduler.clone()
-    }
-
-    pub(crate) fn pending_tasks(&self) -> usize {
-        self.query_stage_scheduler.pending_tasks()
     }
 
     pub(crate) fn metrics_collector(&self) -> &dyn SchedulerMetricsCollector {
@@ -209,13 +197,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             .await
     }
 
-    pub(crate) async fn offer_reservation(
-        &self,
-        reservations: Vec<ExecutorReservation>,
-    ) -> Result<()> {
+    pub(crate) async fn revive_offers(&self) -> Result<()> {
         self.query_stage_event_loop
             .get_sender()?
-            .post_event(QueryStageSchedulerEvent::ReservationOffering(reservations))
+            .post_event(QueryStageSchedulerEvent::ReviveOffers)
             .await
     }
 
@@ -232,7 +217,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                     .get_expired_executors(termination_grace_period);
                 for expired in expired_executors {
                     let executor_id = expired.executor_id.clone();
-                    let executor_manager = state.executor_manager.clone();
 
                     let sender_clone = event_sender.clone();
 
@@ -258,7 +242,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 
                     // If executor is expired, remove it immediately
                     Self::remove_executor(
-                        executor_manager,
+                        state.executor_manager.clone(),
                         sender_clone,
                         &executor_id,
                         Some(stop_reason.clone()),
@@ -268,31 +252,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                     // If executor is not already terminating then stop it. If it is terminating then it should already be shutting
                     // down and we do not need to do anything here.
                     if !terminating {
-                        match state.executor_manager.get_client(&executor_id).await {
-                            Ok(mut client) => {
-                                tokio::task::spawn(async move {
-                                    match client
-                                        .stop_executor(StopExecutorParams {
-                                            executor_id,
-                                            reason: stop_reason,
-                                            force: true,
-                                        })
-                                        .await
-                                    {
-                                        Err(error) => {
-                                            warn!(
-                                            "Failed to send stop_executor rpc due to, {}",
-                                            error
-                                        );
-                                        }
-                                        Ok(_value) => {}
-                                    }
-                                });
-                            }
-                            Err(_) => {
-                                warn!("Executor is already dead, failed to connect to Executor {}", executor_id);
-                            }
-                        }
+                        state
+                            .executor_manager
+                            .stop_executor(&executor_id, stop_reason)
+                            .await;
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(
@@ -341,16 +304,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         };
 
         // Save the executor to state
-        let reservations = self
-            .state
+        self.state
             .executor_manager
-            .register_executor(metadata, executor_data, false)
+            .register_executor(metadata, executor_data)
             .await?;
 
         // If we are using push-based scheduling then reserve this executors slots and send
         // them for scheduling tasks.
         if self.state.config.is_push_staged_scheduling() {
-            self.offer_reservation(reservations).await?;
+            self.revive_offers().await?;
         }
 
         Ok(())
@@ -419,7 +381,7 @@ mod test {
             scheduler
                 .state
                 .executor_manager
-                .register_executor(executor_metadata, executor_data, false)
+                .register_executor(executor_metadata, executor_data)
                 .await?;
         }
 
