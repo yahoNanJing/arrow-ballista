@@ -30,6 +30,8 @@ use crate::scheduler_server::SessionBuilder;
 use crate::state::execution_graph::{create_task_info, ExecutionGraph, TaskDescription};
 use crate::state::task_manager::JobInfoCache;
 use ballista_core::config::BallistaConfig;
+use ballista_core::consistent_hash;
+use ballista_core::consistent_hash::ConsistentHash;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf::{AvailableTaskSlots, ExecutorHeartbeat, JobStatus};
 use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata, PartitionId};
@@ -37,6 +39,9 @@ use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::default_session_builder;
 use clap::ArgEnum;
 use dashmap::DashMap;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::physical_plan::file_format::get_scan_files;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
@@ -361,6 +366,7 @@ pub trait JobState: Send + Sync {
 pub(crate) async fn bind_task_bias(
     mut slots: Vec<&mut AvailableTaskSlots>,
     active_jobs: Arc<DashMap<String, JobInfoCache>>,
+    if_skip: fn(Arc<dyn ExecutionPlan>) -> bool,
 ) -> Vec<BoundTask> {
     let mut schedulable_tasks: Vec<BoundTask> = vec![];
 
@@ -379,7 +385,14 @@ pub(crate) async fn bind_task_bias(
         let (job_id, job_info) = pairs.pair();
         let mut graph = job_info.execution_graph.write().await;
         let session_id = graph.session_id().to_string();
-        if let Some((running_stage, task_id_gen)) = graph.fetch_running_stage() {
+        let mut black_list = vec![];
+        while let Some((running_stage, task_id_gen)) =
+            graph.fetch_running_stage(&black_list)
+        {
+            if if_skip(running_stage.plan.clone()) {
+                black_list.push(running_stage.stage_id);
+                continue;
+            }
             let runnable_tasks = running_stage
                 .task_infos
                 .iter_mut()
@@ -428,6 +441,7 @@ pub(crate) async fn bind_task_bias(
 pub(crate) async fn bind_task_round_robin(
     mut slots: Vec<&mut AvailableTaskSlots>,
     active_jobs: Arc<DashMap<String, JobInfoCache>>,
+    if_skip: fn(Arc<dyn ExecutionPlan>) -> bool,
 ) -> Vec<BoundTask> {
     let mut schedulable_tasks: Vec<BoundTask> = vec![];
 
@@ -445,7 +459,14 @@ pub(crate) async fn bind_task_round_robin(
         let (job_id, job_info) = pairs.pair();
         let mut graph = job_info.execution_graph.write().await;
         let session_id = graph.session_id().to_string();
-        if let Some((running_stage, task_id_gen)) = graph.fetch_running_stage() {
+        let mut black_list = vec![];
+        while let Some((running_stage, task_id_gen)) =
+            graph.fetch_running_stage(&black_list)
+        {
+            if if_skip(running_stage.plan.clone()) {
+                black_list.push(running_stage.stage_id);
+                continue;
+            }
             let runnable_tasks = running_stage
                 .task_infos
                 .iter_mut()
@@ -496,4 +517,145 @@ pub(crate) async fn bind_task_round_robin(
     }
 
     schedulable_tasks
+}
+
+const CONSISTENT_HASH_NUM_REPLICAS: usize = 20;
+const CONSISTENT_HASH_TOLERANCE: usize = 3;
+
+pub(crate) async fn bind_task_consistent_hash(
+    topology_nodes: HashMap<String, TopologyNode>,
+    num_replicas: usize,
+    tolerance: usize,
+    active_jobs: Arc<DashMap<String, JobInfoCache>>,
+) -> Result<(Vec<BoundTask>, Option<ConsistentHash<TopologyNode>>)> {
+    let mut total_slots = 0usize;
+    for (_, node) in topology_nodes.iter() {
+        total_slots += node.available_slots as usize;
+    }
+    if total_slots == 0 {
+        info!("Not enough available executor slots for binding tasks with consistent hashing policy!!!");
+        return Ok((vec![], None));
+    }
+
+    let node_replicas = topology_nodes
+        .into_values()
+        .map(|node| (node, num_replicas))
+        .collect::<Vec<_>>();
+    let mut ch_topology: ConsistentHash<TopologyNode> =
+        ConsistentHash::new(node_replicas);
+
+    let mut schedulable_tasks: Vec<BoundTask> = vec![];
+    for pairs in active_jobs.iter() {
+        let (job_id, job_info) = pairs.pair();
+        let mut graph = job_info.execution_graph.write().await;
+        let session_id = graph.session_id().to_string();
+        let mut black_list = vec![];
+        while let Some((running_stage, task_id_gen)) =
+            graph.fetch_running_stage(&black_list)
+        {
+            let scan_files = get_scan_files(running_stage.plan.clone())?;
+            if is_skip_consistent_hash(&scan_files) {
+                black_list.push(running_stage.stage_id);
+                continue;
+            }
+            let scan_files = &scan_files[0];
+            let tolerance_list = vec![0, tolerance];
+            // First round with 0 tolerance consistent hashing policy
+            // Second round with [`tolerance`] tolerance consistent hashing policy
+            for tolerance in tolerance_list {
+                let runnable_tasks = running_stage
+                    .task_infos
+                    .iter_mut()
+                    .enumerate()
+                    .filter(|(_partition, info)| info.is_none())
+                    .take(total_slots)
+                    .collect::<Vec<_>>();
+                for (partition_id, task_info) in runnable_tasks {
+                    let partition_files = &scan_files[partition_id];
+                    assert!(!partition_files.is_empty());
+                    // Currently we choose the first file for a task for consistent hash.
+                    // Later when splitting files for tasks in datafusion, it's better to
+                    // introduce this hash based policy besides the file number policy or file size policy.
+                    let file_for_hash = &partition_files[0];
+                    if let Some(node) = ch_topology.get_mut_with_tolerance(
+                        file_for_hash.object_meta.location.as_ref().as_bytes(),
+                        tolerance,
+                    ) {
+                        let executor_id = node.id.clone();
+                        let task_id = *task_id_gen;
+                        *task_id_gen += 1;
+                        *task_info = Some(create_task_info(executor_id.clone(), task_id));
+
+                        let partition = PartitionId {
+                            job_id: job_id.clone(),
+                            stage_id: running_stage.stage_id,
+                            partition_id,
+                        };
+                        let task_desc = TaskDescription {
+                            session_id: session_id.clone(),
+                            partition,
+                            stage_attempt_num: running_stage.stage_attempt_num,
+                            task_id,
+                            task_attempt: running_stage.task_failure_numbers
+                                [partition_id],
+                            plan: running_stage.plan.clone(),
+                            output_partitioning: running_stage
+                                .output_partitioning
+                                .clone(),
+                        };
+                        schedulable_tasks.push((executor_id, task_desc));
+
+                        node.available_slots -= 1;
+                        total_slots -= 1;
+                        if total_slots == 0 {
+                            return Ok((schedulable_tasks, Some(ch_topology)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((schedulable_tasks, Some(ch_topology)))
+}
+
+// If if there's no plan which needs to scan files, skip it.
+// Or there are multiple plans which need to scan files for a stage, skip it.
+pub(crate) fn is_skip_consistent_hash(scan_files: &[Vec<Vec<PartitionedFile>>]) -> bool {
+    scan_files.is_empty() || scan_files.len() > 1
+}
+
+#[derive(Clone)]
+pub struct TopologyNode {
+    pub id: String,
+    pub name: String,
+    pub last_seen_ts: u64,
+    pub available_slots: u32,
+}
+
+impl TopologyNode {
+    fn new(
+        host: &str,
+        port: u16,
+        id: &str,
+        last_seen_ts: u64,
+        available_slots: u32,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            name: format!("{host}:{port}"),
+            last_seen_ts,
+            available_slots,
+        }
+    }
+}
+
+impl consistent_hash::node::Node for TopologyNode {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn is_valid(&self) -> bool {
+        self.available_slots > 0
+    }
 }

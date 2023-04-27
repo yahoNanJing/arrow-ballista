@@ -172,9 +172,13 @@ pub enum TaskDistribution {
     /// Eagerly assign tasks to executor slots. This will assign as many task slots per executor
     /// as are currently available
     Bias,
-    /// Distributed tasks evenly across executors. This will try and iterate through available executors
+    /// Distribute tasks evenly across executors. This will try and iterate through available executors
     /// and assign one task to each executor until all tasks are assigned.
     RoundRobin,
+    /// Firstly, try to bind tasks without scanning source files by [`RoundRobin`] policy.
+    /// Then for a task for scanning source files, firstly calculate a hash value based on input files.
+    /// And then bind it with an execute according to consistent hashing policy.
+    ConsistentHash,
 }
 
 impl std::str::FromStr for TaskDistribution {

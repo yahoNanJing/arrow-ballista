@@ -119,10 +119,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             let active_jobs = self.state.task_manager.active_job_cache.clone();
             let schedulable_tasks = match self.state.config.task_distribution {
                 TaskDistribution::Bias => {
-                    bind_task_bias(available_slots, active_jobs).await
+                    bind_task_bias(available_slots, active_jobs, |_| false).await
                 }
                 TaskDistribution::RoundRobin => {
-                    bind_task_round_robin(available_slots, active_jobs).await
+                    bind_task_round_robin(available_slots, active_jobs, |_| false).await
+                }
+                TaskDistribution::ConsistentHash => {
+                    return Err(Status::unimplemented(
+                        "ConsistentHash TaskDistribution is not feasible for pull-based task scheduling"))
                 }
             };
 
