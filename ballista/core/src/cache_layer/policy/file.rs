@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cache_layer::medium::local_disk::LocalDiskMedium;
 use crate::cache_layer::medium::CacheMedium;
 use crate::cache_layer::object_store::ObjectStoreWithKey;
 use crate::error::{BallistaError, Result};
@@ -29,13 +28,9 @@ use ballista_cache::loading_cache::loader::CacheLoader;
 use ballista_cache::{
     create_loading_cache_with_metrics, DefaultLoadingCache, LoadingCacheMetrics,
 };
-use bytes::Bytes;
-use futures::TryStreamExt;
-use log::{error, warn};
+use log::{error, info, warn};
 use object_store::path::Path;
-use object_store::{GetResult, ObjectMeta, ObjectStore};
-use std::any::{Any, TypeId};
-use std::io::Read;
+use object_store::{ObjectMeta, ObjectStore};
 use std::sync::Arc;
 
 type DefaultFileLoadingCache<M> =
@@ -141,6 +136,10 @@ where
     let cache_store = cache_medium.get_object_store();
     let cache_location =
         cache_medium.get_mapping_location(&source_location, source_store);
+    info!(
+        "Going to cache object from {} to {}",
+        source_location, cache_location
+    );
 
     // Check whether the cache location exist or not. If exists, delete it first.
     if cache_store.head(&cache_location).await.is_ok() {
@@ -151,73 +150,30 @@ where
         }
     }
 
-    match source_store.get(&source_location).await.map_err(|e| {
+    let data = source_store
+        .get(&source_location)
+        .await
+        .map_err(|e| {
+            BallistaError::General(format!(
+                "Fail to get file data from {source_location} due to {e}"
+            ))
+        })?
+        .bytes()
+        .await
+        .map_err(|e| {
+            BallistaError::General(format!("Fail to convert to bytes due to {e}"))
+        })?;
+    info!("{} bytes will be cached", data.len());
+    cache_store.put(&cache_location, data).await.map_err(|e| {
         BallistaError::General(format!(
-            "Fail to get file data from {source_location} due to {e}"
+            "Fail to write out data to {cache_location} due to {e}"
         ))
-    })? {
-        GetResult::File(source_file, ..) => {
-            // TODO add as_any() to the ObjectStore trait and check whether two object stores are the same type
-            if cache_medium.type_id() == TypeId::of::<LocalDiskMedium>() {
-                cache_store
-                    .copy(&source_location, &cache_location)
-                    .await
-                    .map_err(|e| {
-                        BallistaError::General(format!(
-                            "Fail to copy local file from {source_location} to {cache_location} due to {e}"
-                        ))
-                    })?;
-            } else {
-                let buf_len = source_file
-                    .metadata()
-                    .map_err(|e| {
-                        BallistaError::General(format!(
-                            "Fail to read file metadata for {source_location} due to {e}"
-                        ))
-                    })?
-                    .len();
-                let mut buf = Vec::with_capacity(buf_len as usize);
-                source_file
-                    .take(buf_len)
-                    .read_to_end(&mut buf)
-                    .map_err(|e| {
-                        BallistaError::General(format!(
-                            "Fail to read file data for {source_location} due to {e}"
-                        ))
-                    })?;
-                cache_store
-                    .put(&cache_location, Bytes::from(buf))
-                    .await
-                    .map_err(|e| {
-                        BallistaError::General(format!(
-                            "Fail to write data to {cache_location}  due to {e}"
-                        ))
-                    })?;
-            }
-        }
-        GetResult::Stream(s) => {
-            let mut buf: Vec<u8> = vec![];
-            s.try_fold(&mut buf, |acc, part| async move {
-                let mut part: Vec<u8> = part.into();
-                acc.append(&mut part);
-                Ok(acc)
-            })
-            .await
-            .map_err(|e| {
-                BallistaError::General(format!(
-                    "Fail to collect data stream from {source_location} due to {e}"
-                ))
-            })?;
-            cache_store
-                .put(&cache_location, Bytes::from(buf))
-                .await
-                .map_err(|e| {
-                    BallistaError::General(format!(
-                        "Fail to write out data to {cache_location} due to {e}"
-                    ))
-                })?;
-        }
-    };
+    })?;
+
+    info!(
+        "Object {} has already been cached to {}",
+        source_location, cache_location
+    );
 
     let cache_meta = cache_store.head(&cache_location).await.map_err(|e| {
         BallistaError::General(format!(
