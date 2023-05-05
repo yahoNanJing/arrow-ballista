@@ -31,6 +31,7 @@ use ballista_cache::{
 use log::{error, info, warn};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+use std::ops::Range;
 use std::sync::Arc;
 
 type DefaultFileLoadingCache<M> =
@@ -150,18 +151,17 @@ where
         }
     }
 
+    let range = Range {
+        start: 0,
+        end: source_meta.size,
+    };
     let data = source_store
-        .get(&source_location)
+        .get_range(&source_location, range)
         .await
         .map_err(|e| {
             BallistaError::General(format!(
                 "Fail to get file data from {source_location} due to {e}"
             ))
-        })?
-        .bytes()
-        .await
-        .map_err(|e| {
-            BallistaError::General(format!("Fail to convert to bytes due to {e}"))
         })?;
     info!("{} bytes will be cached", data.len());
     cache_store.put(&cache_location, data).await.map_err(|e| {
