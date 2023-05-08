@@ -63,6 +63,10 @@ use crate::{as_task_status, TaskExecutionTimes};
 type ServerHandle = JoinHandle<Result<(), BallistaError>>;
 type SchedulerClients = Arc<DashMap<String, SchedulerGrpcClient<Channel>>>;
 
+// TODO move to configuration file
+/// Default heartbeat interval in seconds to the scheduler for push-based task scheduling
+pub const DEFAULT_HEARTBEAT_INTERVAL_SECONDS: u64 = 60;
+
 /// Wrap TaskDefinition with its curator scheduler id for task update to its specific curator scheduler later
 #[derive(Debug)]
 struct CuratorTaskDefinition {
@@ -487,7 +491,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> Heartbeater<T, U>
             while !heartbeat_shutdown.is_shutdown() {
                 executor_server.heartbeat().await;
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_millis(60000)) => {},
+                    _ = tokio::time::sleep(Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL_SECONDS)) => {},
                     _ = heartbeat_shutdown.recv() => {
                         info!("Stop heartbeater");
                         drop(heartbeat_complete);

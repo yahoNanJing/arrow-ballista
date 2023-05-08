@@ -751,9 +751,7 @@ mod test {
         // executor should be marked to dead
         assert!(is_stopped, "Executor not marked dead after 50ms");
 
-        let active_executors = state
-            .executor_manager
-            .get_alive_executors_within_one_minute();
+        let active_executors = state.executor_manager.get_alive_executors();
         assert!(active_executors.is_empty());
 
         let expired_executors = state
@@ -880,9 +878,7 @@ mod test {
             .expect("Received error response")
             .into_inner();
 
-        let active_executors = state
-            .executor_manager
-            .get_alive_executors_within_one_minute();
+        let active_executors = state.executor_manager.get_alive_executors();
         assert_eq!(active_executors.len(), 1);
 
         let expired_executors = state
@@ -897,9 +893,7 @@ mod test {
         // executor should be marked to dead
         assert!(state.executor_manager.is_dead_executor("abc"));
 
-        let active_executors = state
-            .executor_manager
-            .get_alive_executors_within_one_minute();
+        let active_executors = state.executor_manager.get_alive_executors();
         assert!(active_executors.is_empty());
         Ok(())
     }

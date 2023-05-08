@@ -549,9 +549,8 @@ pub fn clean_up_log_loop(
         log_clean_up_ttl,
     );
 
-    let mut interval_time = time::interval(tokio::time::Duration::from_secs(
-        log_clean_up_interval_seconds,
-    ));
+    let mut interval_time =
+        time::interval(Duration::from_secs(log_clean_up_interval_seconds));
     tokio::spawn(async move {
         loop {
             interval_time.tick().await;
@@ -568,11 +567,7 @@ pub fn clean_up_log_loop(
 /// Check and clean up old log files under the specific directory.
 async fn clean_up_log(log_dir: &str, ttl_seconds: u64) -> Result<()> {
     let mut dir = fs::read_dir(log_dir).await?;
-    let cutoff = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .checked_sub(Duration::from_secs(ttl_seconds))
-        .expect("The cut off time went backwards");
+    let cutoff = get_time_before_interval(ttl_seconds);
 
     let mut to_deleted = vec![];
     while let Some(child) = dir.next_entry().await? {
@@ -583,6 +578,7 @@ async fn clean_up_log(log_dir: &str, ttl_seconds: u64) -> Result<()> {
                     .modified()?
                     .duration_since(UNIX_EPOCH)
                     .expect("Time went backwards")
+                    .as_secs()
                     < cutoff
                 {
                     to_deleted.push(child.path().into_os_string())
@@ -602,6 +598,17 @@ async fn clean_up_log(log_dir: &str, ttl_seconds: u64) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Given an interval in seconds, get the time in seconds before now
+pub fn get_time_before_interval(interval_seconds: u64) -> u64 {
+    let now_epoch_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
+    now_epoch_ts
+        .checked_sub(Duration::from_secs(interval_seconds))
+        .unwrap_or_else(|| Duration::from_secs(0))
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -625,9 +632,9 @@ mod tests {
         assert_eq!(count1, 1);
 
         let ttl_seconds = 1;
-        tokio::time::sleep(Duration::from_secs(ttl_seconds)).await;
+        tokio::time::sleep(Duration::from_secs(ttl_seconds + 1)).await;
 
-        clean_up_log(log_dir.to_str().unwrap(), 1).await.unwrap();
+        clean_up_log(log_dir.to_str().unwrap(), ttl_seconds).await.unwrap();
         let count2 = fs::read_dir(&log_dir)?.count();
         assert_eq!(count2, 0);
 

@@ -37,7 +37,7 @@ use crate::cluster::event::ClusterEventSender;
 use crate::scheduler_server::{timestamp_millis, timestamp_secs, SessionBuilder};
 use crate::state::session_manager::create_datafusion_context;
 use ballista_core::serde::protobuf::job_status::Status;
-use log::warn;
+use log::{error, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::ops::DerefMut;
 
@@ -64,9 +64,15 @@ impl InMemoryClusterState {
     fn get_topology_nodes(
         &self,
         guard: &MutexGuard<HashMap<String, AvailableTaskSlots>>,
+        executors: Option<HashSet<String>>,
     ) -> HashMap<String, TopologyNode> {
         let mut nodes: HashMap<String, TopologyNode> = HashMap::new();
-        for slots in guard.values() {
+        for (executor_id, slots) in guard.iter() {
+            if let Some(executors) = executors.as_ref() {
+                if !executors.contains(executor_id) {
+                    continue;
+                }
+            }
             if let Some(executor) = self.executors.get(&slots.executor_id) {
                 let node = TopologyNode::new(
                     &executor.host,
@@ -134,21 +140,28 @@ impl ClusterState for InMemoryClusterState {
                     },
                 )
                 .await;
+                info!("{} tasks bound by round robin policy", bound_tasks.len());
                 let (bound_tasks_consistent_hash, ch_topology) =
                     bind_task_consistent_hash(
-                        self.get_topology_nodes(&guard),
+                        self.get_topology_nodes(&guard, executors),
                         CONSISTENT_HASH_NUM_REPLICAS,
                         CONSISTENT_HASH_TOLERANCE,
                         active_jobs,
                     )
                     .await?;
+                info!(
+                    "{} tasks bound by consistent hashing policy",
+                    bound_tasks_consistent_hash.len()
+                );
                 if !bound_tasks_consistent_hash.is_empty() {
                     bound_tasks.extend(bound_tasks_consistent_hash);
                     // Update the available slots
                     let ch_topology = ch_topology.unwrap();
                     for node in ch_topology.nodes() {
-                        if let Some(mut data) = guard.get_mut(node.name()) {
+                        if let Some(mut data) = guard.get_mut(&node.id) {
                             data.slots = node.available_slots;
+                        } else {
+                            error!("Fail to find executor data for {}", &node.id);
                         }
                     }
                 }
@@ -243,6 +256,8 @@ impl ClusterState for InMemoryClusterState {
         }
 
         self.heartbeats.remove(executor_id);
+
+        self.executors.remove(executor_id);
 
         Ok(())
     }

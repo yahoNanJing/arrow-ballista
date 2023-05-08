@@ -48,7 +48,7 @@ use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 use futures::StreamExt;
 use itertools::Itertools;
-use log::{info, warn};
+use log::{error, info, warn};
 use prost::Message;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -145,9 +145,15 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     fn get_topology_nodes(
         &self,
         available_slots: &[AvailableTaskSlots],
+        executors: Option<HashSet<String>>,
     ) -> HashMap<String, TopologyNode> {
         let mut nodes: HashMap<String, TopologyNode> = HashMap::new();
         for slots in available_slots {
+            if let Some(executors) = executors.as_ref() {
+                if !executors.contains(&slots.executor_id) {
+                    continue;
+                }
+            }
             if let Some(executor) = self.executors.get(&slots.executor_id) {
                 let node = TopologyNode::new(
                     &executor.host,
@@ -262,14 +268,19 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         },
                     )
                     .await;
+                    info!("{} tasks bound by round robin policy", bound_tasks.len());
                     let (bound_tasks_consistent_hash, ch_topology) =
                         bind_task_consistent_hash(
-                            self.get_topology_nodes(&slots.task_slots),
+                            self.get_topology_nodes(&slots.task_slots, executors),
                             CONSISTENT_HASH_NUM_REPLICAS,
                             CONSISTENT_HASH_TOLERANCE,
                             active_jobs,
                         )
                         .await?;
+                    info!(
+                        "{} tasks bound by consistent hashing policy",
+                        bound_tasks_consistent_hash.len()
+                    );
                     if !bound_tasks_consistent_hash.is_empty() {
                         bound_tasks.extend(bound_tasks_consistent_hash);
                         // Update the available slots
@@ -281,8 +292,10 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                                 .collect();
                         let ch_topology = ch_topology.unwrap();
                         for node in ch_topology.nodes() {
-                            if let Some(mut data) = executor_data.get_mut(node.name()) {
+                            if let Some(mut data) = executor_data.get_mut(&node.id) {
                                 data.slots = node.available_slots;
+                            } else {
+                                error!("Fail to find executor data for {}", &node.id);
                             }
                         }
                         slots.task_slots = executor_data.into_values().collect();

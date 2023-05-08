@@ -20,7 +20,7 @@
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 use std::{env, io};
 
 use anyhow::{Context, Result};
@@ -56,8 +56,8 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::{
-    create_grpc_client_connection, create_grpc_server, with_cache_layer,
-    with_object_store_registry,
+    create_grpc_client_connection, create_grpc_server, get_time_before_interval,
+    with_cache_layer, with_object_store_registry,
 };
 use ballista_core::BALLISTA_VERSION;
 
@@ -548,11 +548,7 @@ async fn clean_all_shuffle_data(work_dir: &str) -> Result<()> {
 /// Determines if a directory contains files newer than the cutoff time.
 /// If return true, it means the directory contains files newer than the cutoff time. It satisfy the ttl and should not be deleted.
 pub async fn satisfy_dir_ttl(dir: DirEntry, ttl_seconds: u64) -> Result<bool> {
-    let cutoff = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Time went backwards")
-        .checked_sub(Duration::from_secs(ttl_seconds))
-        .expect("The cut off time went backwards");
+    let cutoff = get_time_before_interval(ttl_seconds);
 
     let mut to_check = vec![dir];
     while let Some(dir) = to_check.pop() {
@@ -563,6 +559,7 @@ pub async fn satisfy_dir_ttl(dir: DirEntry, ttl_seconds: u64) -> Result<bool> {
             .modified()?
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
+            .as_secs()
             > cutoff
         {
             return Ok(true);
@@ -577,6 +574,7 @@ pub async fn satisfy_dir_ttl(dir: DirEntry, ttl_seconds: u64) -> Result<bool> {
                 .modified()?
                 .duration_since(UNIX_EPOCH)
                 .expect("Time went backwards")
+                .as_secs()
                 > cutoff
             {
                 return Ok(true);

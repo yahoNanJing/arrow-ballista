@@ -303,9 +303,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
                 vec![]
             };
 
-            for event in job_events {
-                events.push(event);
-            }
+            events.extend(job_events);
         }
 
         Ok(events)

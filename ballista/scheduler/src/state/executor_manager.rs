@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use ballista_core::error::BallistaError;
 use ballista_core::error::Result;
@@ -32,7 +32,7 @@ use ballista_core::serde::protobuf::{
     RemoveJobDataParams, StopExecutorParams,
 };
 use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata};
-use ballista_core::utils::create_grpc_client_connection;
+use ballista_core::utils::{create_grpc_client_connection, get_time_before_interval};
 use dashmap::DashMap;
 use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
@@ -79,7 +79,15 @@ impl ExecutorManager {
         distribution: TaskDistribution,
         active_jobs: Arc<DashMap<String, JobInfoCache>>,
     ) -> Result<Vec<BoundTask>> {
-        let alive_executors = self.get_alive_executors_within_one_minute();
+        if active_jobs.is_empty() {
+            warn!("There's no active jobs for binding tasks");
+            return Ok(vec![]);
+        }
+        let alive_executors = self.get_alive_executors();
+        if alive_executors.is_empty() {
+            warn!("There's no alive executors for binding tasks");
+            return Ok(vec![]);
+        }
         self.cluster_state
             .bind_schedulable_tasks(distribution, active_jobs, Some(alive_executors))
             .await
@@ -164,7 +172,7 @@ impl ExecutorManager {
 
     /// Send rpc to Executors to clean up the job data
     async fn clean_up_job_data_inner(&self, job_id: String) {
-        let alive_executors = self.get_alive_executors_within_one_minute();
+        let alive_executors = self.get_alive_executors();
         for executor in alive_executors {
             let job_id_clone = job_id.to_owned();
             if let Ok(mut client) = self.get_client(&executor).await {
@@ -281,49 +289,18 @@ impl ExecutorManager {
             })
     }
 
-    /// Retrieve the set of all executor IDs where the executor has been observed in the last
-    /// `last_seen_ts_threshold` seconds.
-    pub(crate) fn get_alive_executors(
-        &self,
-        last_seen_ts_threshold: u64,
-    ) -> HashSet<String> {
-        self.cluster_state
-            .executor_heartbeats()
-            .iter()
-            .filter_map(|(exec, heartbeat)| {
-                let active = matches!(
-                    heartbeat
-                        .status
-                        .as_ref()
-                        .and_then(|status| status.status.as_ref()),
-                    Some(executor_status::Status::Active(_))
-                );
-                let live = heartbeat.timestamp > last_seen_ts_threshold;
-
-                (active && live).then(|| exec.clone())
-            })
-            .collect()
-    }
-
     /// Return a list of expired executors
     pub(crate) fn get_expired_executors(
         &self,
         termination_grace_period: u64,
     ) -> Vec<ExecutorHeartbeat> {
-        let now_epoch_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards");
         // Threshold for last heartbeat from Active executor before marking dead
-        let last_seen_threshold = now_epoch_ts
-            .checked_sub(Duration::from_secs(DEFAULT_EXECUTOR_TIMEOUT_SECONDS))
-            .unwrap_or_else(|| Duration::from_secs(0))
-            .as_secs();
+        let last_seen_threshold =
+            get_time_before_interval(DEFAULT_EXECUTOR_TIMEOUT_SECONDS);
 
         // Threshold for last heartbeat for Fenced executor before marking dead
-        let termination_wait_threshold = now_epoch_ts
-            .checked_sub(Duration::from_secs(termination_grace_period))
-            .unwrap_or_else(|| Duration::from_secs(0))
-            .as_secs();
+        let termination_wait_threshold =
+            get_time_before_interval(termination_grace_period);
 
         self.cluster_state
             .executor_heartbeats()
@@ -348,14 +325,10 @@ impl ExecutorManager {
             .collect::<Vec<_>>()
     }
 
-    pub(crate) fn get_alive_executors_within_one_minute(&self) -> HashSet<String> {
-        let now_epoch_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards");
-        let last_seen_threshold = now_epoch_ts
-            .checked_sub(Duration::from_secs(60))
-            .unwrap_or_else(|| Duration::from_secs(0));
-        self.get_alive_executors(last_seen_threshold.as_secs())
+    pub(crate) fn get_alive_executors(&self) -> HashSet<String> {
+        let last_seen_threshold =
+            get_time_before_interval(DEFAULT_EXECUTOR_TIMEOUT_SECONDS);
+        self.get_alive_executors_inner(last_seen_threshold)
     }
 
     pub async fn stop_executor(&self, executor_id: &str, stop_reason: String) {
@@ -408,6 +381,27 @@ impl ExecutorManager {
             })?;
 
         Ok(())
+    }
+
+    /// Retrieve the set of all executor IDs where the executor has been observed in the last
+    /// `last_seen_ts_threshold` seconds.
+    fn get_alive_executors_inner(&self, last_seen_ts_threshold: u64) -> HashSet<String> {
+        self.cluster_state
+            .executor_heartbeats()
+            .iter()
+            .filter_map(|(exec, heartbeat)| {
+                let active = matches!(
+                    heartbeat
+                        .status
+                        .as_ref()
+                        .and_then(|status| status.status.as_ref()),
+                    Some(executor_status::Status::Active(_))
+                );
+                let live = heartbeat.timestamp > last_seen_ts_threshold;
+
+                (active && live).then(|| exec.clone())
+            })
+            .collect()
     }
 
     async fn get_client(&self, executor_id: &str) -> Result<ExecutorGrpcClient<Channel>> {

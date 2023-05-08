@@ -43,6 +43,7 @@ use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use log::{debug, error, info};
 use prost::Message;
+use tracing::warn;
 
 pub mod execution_graph;
 pub mod execution_graph_dot;
@@ -161,6 +162,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
                 self.task_manager.active_job_cache.clone(),
             )
             .await?;
+        if schedulable_tasks.is_empty() {
+            warn!("No schedulable tasks found to be launched");
+            return Ok(());
+        }
 
         let state = self.clone();
         tokio::spawn(async move {

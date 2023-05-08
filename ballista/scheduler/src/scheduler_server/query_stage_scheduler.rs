@@ -269,14 +269,13 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     .await
                 {
                     Ok(stage_events) => {
+                        for stage_event in stage_events {
+                            tx_event.post_event(stage_event).await?;
+                        }
                         if self.state.config.is_push_staged_scheduling() {
                             tx_event
                                 .post_event(QueryStageSchedulerEvent::ReviveOffers)
                                 .await?;
-                        }
-
-                        for stage_event in stage_events {
-                            tx_event.post_event(stage_event).await?;
                         }
                     }
                     Err(e) => {

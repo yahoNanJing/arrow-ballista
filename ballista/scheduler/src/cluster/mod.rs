@@ -390,9 +390,15 @@ pub(crate) async fn bind_task_bias(
             graph.fetch_running_stage(&black_list)
         {
             if if_skip(running_stage.plan.clone()) {
+                info!(
+                    "Will skip stage {}/{} for bias task binding",
+                    job_id, running_stage.stage_id
+                );
                 black_list.push(running_stage.stage_id);
                 continue;
             }
+            // We are sure that it will at least bind one task by going through the following logic.
+            // It will not go into a dead loop.
             let runnable_tasks = running_stage
                 .task_infos
                 .iter_mut()
@@ -450,6 +456,7 @@ pub(crate) async fn bind_task_round_robin(
         warn!("Not enough available executor slots for task running!!!");
         return schedulable_tasks;
     }
+    info!("Total slot number is {}", total_slots);
 
     // Sort the slots by descending order
     slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
@@ -464,9 +471,15 @@ pub(crate) async fn bind_task_round_robin(
             graph.fetch_running_stage(&black_list)
         {
             if if_skip(running_stage.plan.clone()) {
+                info!(
+                    "Will skip stage {}/{} for round robin task binding",
+                    job_id, running_stage.stage_id
+                );
                 black_list.push(running_stage.stage_id);
                 continue;
             }
+            // We are sure that it will at least bind one task by going through the following logic.
+            // It will not go into a dead loop.
             let runnable_tasks = running_stage
                 .task_infos
                 .iter_mut()
@@ -536,6 +549,7 @@ pub(crate) async fn bind_task_consistent_hash(
         info!("Not enough available executor slots for binding tasks with consistent hashing policy!!!");
         return Ok((vec![], None));
     }
+    info!("Total slot number is {}", total_slots);
 
     let node_replicas = topology_nodes
         .into_values()
@@ -555,9 +569,14 @@ pub(crate) async fn bind_task_consistent_hash(
         {
             let scan_files = get_scan_files(running_stage.plan.clone())?;
             if is_skip_consistent_hash(&scan_files) {
+                info!(
+                    "Will skip stage {}/{} for consistent hashing task binding",
+                    job_id, running_stage.stage_id
+                );
                 black_list.push(running_stage.stage_id);
                 continue;
             }
+            let pre_total_slots = total_slots;
             let scan_files = &scan_files[0];
             let tolerance_list = vec![0, tolerance];
             // First round with 0 tolerance consistent hashing policy
@@ -612,6 +631,11 @@ pub(crate) async fn bind_task_consistent_hash(
                         }
                     }
                 }
+            }
+            // Since there's no more tasks from this stage which can be bound,
+            // we should skip this stage at the next round.
+            if pre_total_slots == total_slots {
+                black_list.push(running_stage.stage_id);
             }
         }
     }
