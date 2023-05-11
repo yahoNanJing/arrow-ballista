@@ -533,7 +533,7 @@ pub(crate) async fn bind_task_round_robin(
 }
 
 const CONSISTENT_HASH_NUM_REPLICAS: usize = 20;
-const CONSISTENT_HASH_TOLERANCE: usize = 3;
+const CONSISTENT_HASH_TOLERANCE: usize = 1;
 
 pub(crate) async fn bind_task_consistent_hash(
     topology_nodes: HashMap<String, TopologyNode>,
