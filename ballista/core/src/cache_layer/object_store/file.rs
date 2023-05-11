@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use ballista_cache::loading_cache::LoadingCache;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use log::info;
 use object_store::path::Path;
 use object_store::{Error, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore};
 use std::fmt::{Debug, Display, Formatter};
@@ -101,39 +102,69 @@ where
         })
     }
 
+    /// If it already exists in cache, use the cached result.
+    /// Otherwise, trigger a task to load the data into cache; At the meanwhile,
+    /// get the result from the data source
     async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        let cache_object_mata = self
-            .cache_layer
-            .cache()
-            .get(location.clone(), self.inner.clone())
-            .await;
-        let cache_location = &cache_object_mata.location;
-        self.cache_layer.cache_store().get(cache_location).await
+        if let Some(cache_object_mata) =
+            self.cache_layer.cache().get_if_present(location.clone())
+        {
+            info!("Data for {} is cached", location);
+            let cache_location = &cache_object_mata.location;
+            self.cache_layer.cache_store().get(cache_location).await
+        } else {
+            let cache_layer = self.cache_layer.clone();
+            let key = location.clone();
+            let extra = self.inner.clone();
+            tokio::spawn(async move {
+                info!("Going to cache data for {}", key);
+                cache_layer.cache().get(key, extra).await;
+            });
+            self.inner.get(location).await
+        }
     }
 
+    /// If it already exists in cache, use the cached result.
+    /// Otherwise, trigger a task to load the data into cache; At the meanwhile,
+    /// get the result from the data source
     async fn get_range(
         &self,
         location: &Path,
         range: Range<usize>,
     ) -> object_store::Result<Bytes> {
-        let cache_object_mata = self
-            .cache_layer
-            .cache()
-            .get(location.clone(), self.inner.clone())
-            .await;
-        let cache_location = &cache_object_mata.location;
-        self.cache_layer
-            .cache_store()
-            .get_range(cache_location, range)
-            .await
+        if let Some(cache_object_mata) =
+            self.cache_layer.cache().get_if_present(location.clone())
+        {
+            info!("Data for {} is cached", location);
+            let cache_location = &cache_object_mata.location;
+            self.cache_layer
+                .cache_store()
+                .get_range(cache_location, range)
+                .await
+        } else {
+            let cache_layer = self.cache_layer.clone();
+            let key = location.clone();
+            let extra = self.inner.clone();
+            tokio::spawn(async move {
+                info!("Going to cache data for {}", key);
+                cache_layer.cache().get(key, extra).await;
+            });
+            self.inner.get_range(location, range).await
+        }
     }
 
+    /// If it already exists in cache, use the cached result.
+    /// Otherwise, get the result from the data source.
+    /// It will not trigger the task to load data into cache.
     async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        Ok(self
-            .cache_layer
-            .cache()
-            .get(location.clone(), self.inner.clone())
-            .await)
+        if let Some(cache_object_mata) =
+            self.cache_layer.cache().get_if_present(location.clone())
+        {
+            let cache_location = &cache_object_mata.location;
+            self.cache_layer.cache_store().head(cache_location).await
+        } else {
+            self.inner.head(location).await
+        }
     }
 
     async fn delete(&self, _location: &Path) -> object_store::Result<()> {
