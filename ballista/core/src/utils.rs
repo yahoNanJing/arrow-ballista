@@ -634,7 +634,9 @@ mod tests {
         let ttl_seconds = 1;
         tokio::time::sleep(Duration::from_secs(ttl_seconds + 1)).await;
 
-        clean_up_log(log_dir.to_str().unwrap(), ttl_seconds).await.unwrap();
+        clean_up_log(log_dir.to_str().unwrap(), ttl_seconds)
+            .await
+            .unwrap();
         let count2 = fs::read_dir(&log_dir)?.count();
         assert_eq!(count2, 0);
 
