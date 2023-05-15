@@ -33,3 +33,4 @@ pub mod state;
 pub mod flight_sql;
 #[cfg(test)]
 pub mod test_utils;
+pub mod zk;

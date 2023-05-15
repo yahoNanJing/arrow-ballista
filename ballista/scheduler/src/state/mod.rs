@@ -377,4 +377,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             self.config.finished_job_state_clean_up_interval_seconds,
         );
     }
+
+    /// cleanup the state of this scheduler server
+    pub(crate) async fn clear_state(&self) {
+        // clear executor manager
+        self.executor_manager.clean_up_executor_manager().await;
+        // clear task manager
+        self.task_manager.clean_up_task_manager();
+        // clear session manager
+        self.session_manager.clean_up_all_session();
+        info!("Clear the scheduler state successfully");
+    }
 }

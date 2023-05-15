@@ -55,6 +55,7 @@ pub enum BallistaError {
     // (executor_id, map_stage_id, map_partition_id, message)
     FetchFailed(String, usize, usize, String),
     Cancelled,
+    NotSchedulerLeader,
 }
 
 #[allow(clippy::from_over_into)]
@@ -221,6 +222,7 @@ impl Display for BallistaError {
                 )
             }
             BallistaError::Cancelled => write!(f, "Task cancelled"),
+            BallistaError::NotSchedulerLeader => write!(f, "NotSchedulerLeader"),
         }
     }
 }

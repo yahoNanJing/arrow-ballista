@@ -484,6 +484,10 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .get(executor_id)
             .map(|r| r.value().clone())
     }
+
+    async fn clean_up_cluster_state(&self) {
+        unimplemented!("Kv cluster state does not implement clean up cluster state")
+    }
 }
 
 #[async_trait]
@@ -740,6 +744,14 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .await?;
 
         Ok(create_datafusion_context(config, self.session_builder))
+    }
+
+    fn clean_up_session(&self) {
+        unimplemented!("Kv cluster state does not implement clean up session")
+    }
+
+    fn clean_up_jobs_and_tasks(&self) {
+        unimplemented!("Kv cluster state does not implement clean up jobs and tasks")
     }
 }
 

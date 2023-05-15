@@ -634,6 +634,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
             }
         });
     }
+
+    pub(crate) fn clean_up_task_manager(&self) {
+        info!("Clear task manager for active job cache");
+        self.active_job_cache.clear();
+
+        info!("Clear job and task state");
+        self.state.clean_up_jobs_and_tasks();
+    }
 }
 
 pub struct JobOverview {

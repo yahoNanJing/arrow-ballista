@@ -51,6 +51,10 @@ impl SessionManager {
     pub async fn get_session(&self, session_id: &str) -> Result<Arc<SessionContext>> {
         self.state.get_session(session_id).await
     }
+
+    pub(crate) fn clean_up_all_session(&self) {
+        self.state.clean_up_session();
+    }
 }
 
 /// Create a DataFusion session context that is compatible with Ballista Configuration

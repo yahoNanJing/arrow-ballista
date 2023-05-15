@@ -164,3 +164,25 @@ name = "scheduler_event_expected_processing_duration"
 type = "u64"
 default = "0"
 doc = "The maximum expected processing time of a scheduler event (microseconds). Zero means disable."
+
+# parameters for multi scheduler with zookeeper
+[[param]]
+name = "zk_address"
+type = "String"
+doc = "The address of zookeeper"
+
+[[param]]
+name = "zk_session_timeout"
+type = "u64"
+doc = "The second timeout for the zookeeper session"
+default = "60"
+
+[[param]]
+name = "zk_leader_election_path"
+type = "String"
+doc = "The path of the leader election in the zookeeper"
+
+[[param]]
+name = "zk_leader_host_path"
+type = "String"
+doc = "The path of leader host in the zookeeper"

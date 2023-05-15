@@ -425,6 +425,17 @@ impl ExecutorManager {
         }
     }
 
+    pub(crate) async fn clean_up_executor_manager(&self) {
+        info!("Clear the cluster state");
+        self.cluster_state.clean_up_cluster_state().await;
+
+        info!(
+            "Clear the connection cache of client cache, the previous size is {}",
+            self.clients.len()
+        );
+        self.clients.clear();
+    }
+
     #[cfg(not(test))]
     async fn test_connectivity(metadata: &ExecutorMetadata) -> Result<()> {
         let executor_url = format!("http://{}:{}", metadata.host, metadata.grpc_port);

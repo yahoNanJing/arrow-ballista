@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::result;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ballista_core::error::Result;
+use ballista_core::error::{BallistaError, Result};
 use ballista_core::event_loop::{EventLoop, EventSender};
 use ballista_core::serde::protobuf::TaskStatus;
 use ballista_core::serde::BallistaCodec;
@@ -33,7 +35,8 @@ use crate::cluster::BallistaCluster;
 use crate::config::SchedulerConfig;
 use crate::metrics::SchedulerMetricsCollector;
 use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata};
-use log::{error, warn};
+use log::{error, info, warn};
+use tonic::Status;
 
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
 use crate::scheduler_server::query_stage_scheduler::QueryStageScheduler;
@@ -66,6 +69,8 @@ pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
     pub(crate) query_stage_event_loop: EventLoop<QueryStageSchedulerEvent>,
     query_stage_scheduler: Arc<QueryStageScheduler<T, U>>,
     executor_termination_grace_period: u64,
+    // flag: used to identify whether the server can provide services or not
+    stopped: Arc<AtomicBool>,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T, U> {
@@ -100,6 +105,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             query_stage_event_loop,
             query_stage_scheduler,
             executor_termination_grace_period: config.executor_termination_grace_period,
+            stopped: Arc::new(AtomicBool::from(false)),
         }
     }
 
@@ -137,6 +143,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             query_stage_event_loop,
             query_stage_scheduler,
             executor_termination_grace_period: config.executor_termination_grace_period,
+            stopped: Arc::new(AtomicBool::from(false)),
         }
     }
 
@@ -210,17 +217,19 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         let state = self.state.clone();
         let event_sender = self.query_stage_event_loop.get_sender()?;
         let termination_grace_period = self.executor_termination_grace_period;
+        let stop_capture = self.stopped.clone();
         tokio::task::spawn(async move {
             loop {
-                let expired_executors = state
-                    .executor_manager
-                    .get_expired_executors(termination_grace_period);
-                for expired in expired_executors {
-                    let executor_id = expired.executor_id.clone();
+                if !stop_capture.load(Ordering::SeqCst) {
+                    let expired_executors = state
+                        .executor_manager
+                        .get_expired_executors(termination_grace_period);
+                    for expired in expired_executors {
+                        let executor_id = expired.executor_id.clone();
 
-                    let sender_clone = event_sender.clone();
+                        let sender_clone = event_sender.clone();
 
-                    let terminating = matches!(
+                        let terminating = matches!(
                         expired
                             .status
                             .as_ref()
@@ -228,40 +237,41 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                         Some(ballista_core::serde::protobuf::executor_status::Status::Terminating(_))
                     );
 
-                    let stop_reason = if terminating {
-                        format!(
-                        "TERMINATING executor {executor_id} heartbeat timed out after {termination_grace_period}s"
-                    )
-                    } else {
-                        format!(
-                            "ACTIVE executor {executor_id} heartbeat timed out after {DEFAULT_EXECUTOR_TIMEOUT_SECONDS}s",
-                        )
-                    };
+                        let stop_reason = if terminating {
+                            format!(
+                                "TERMINATING executor {executor_id} heartbeat timed out after {termination_grace_period}s"
+                            )
+                        } else {
+                            format!(
+                                "ACTIVE executor {executor_id} heartbeat timed out after {DEFAULT_EXECUTOR_TIMEOUT_SECONDS}s",
+                            )
+                        };
 
-                    warn!("{stop_reason}");
+                        warn!("{stop_reason}");
 
-                    // If executor is expired, remove it immediately
-                    Self::remove_executor(
-                        state.executor_manager.clone(),
-                        sender_clone,
-                        &executor_id,
-                        Some(stop_reason.clone()),
-                        0,
-                    );
+                        // If executor is expired, remove it immediately
+                        Self::remove_executor(
+                            state.executor_manager.clone(),
+                            sender_clone,
+                            &executor_id,
+                            Some(stop_reason.clone()),
+                            0,
+                        );
 
-                    // If executor is not already terminating then stop it. If it is terminating then it should already be shutting
-                    // down and we do not need to do anything here.
-                    if !terminating {
-                        state
-                            .executor_manager
-                            .stop_executor(&executor_id, stop_reason)
-                            .await;
+                        // If executor is not already terminating then stop it. If it is terminating then it should already be shutting
+                        // down and we do not need to do anything here.
+                        if !terminating {
+                            state
+                                .executor_manager
+                                .stop_executor(&executor_id, stop_reason)
+                                .await;
+                        }
                     }
+                    tokio::time::sleep(Duration::from_secs(
+                        EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS,
+                    ))
+                    .await;
                 }
-                tokio::time::sleep(Duration::from_secs(
-                    EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS,
-                ))
-                .await;
             }
         });
         Ok(())
@@ -316,6 +326,49 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn stop_service(&self) {
+        if self.stopped.load(Ordering::SeqCst) {
+            warn!("Can't stop the scheduler server, the server has been stopped");
+        } else {
+            // 1. stop
+            self.stopped.store(true, Ordering::SeqCst);
+            // 2. stop event loop:
+            self.query_stage_event_loop.stop();
+            // 3. clear state
+            self.state.clear_state().await;
+
+            info!("Stop the scheduler server successfully");
+        }
+    }
+
+    pub(crate) async fn restart_service(&mut self) {
+        if !self.stopped.load(Ordering::SeqCst) {
+            warn!(
+                "The scheduler server has not been stopped, and don't need to restart it"
+            );
+        } else {
+            // 1. clear state
+            // 2. restart the event loop
+            // 3. start
+            self.state.clear_state().await;
+            // restart the event loop
+            self.query_stage_event_loop.restart();
+            self.stopped.store(false, Ordering::SeqCst);
+
+            info!("Restart the scheduler server");
+        }
+    }
+
+    pub(crate) fn check_scheduler_leader(&self) -> result::Result<(), Status> {
+        if self.stopped.load(Ordering::SeqCst) {
+            let msg = format!("{:?}", BallistaError::NotSchedulerLeader);
+            warn!("Not scheduler leader");
+            Err(Status::internal(msg))
+        } else {
+            Ok(())
+        }
     }
 }
 

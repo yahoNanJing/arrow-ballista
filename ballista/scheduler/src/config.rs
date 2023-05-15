@@ -54,6 +54,14 @@ pub struct SchedulerConfig {
     pub executor_termination_grace_period: u64,
     /// The maximum expected processing time of a scheduler event (microseconds). Zero means disable.
     pub scheduler_event_expected_processing_duration: u64,
+    /// Use the zk to support multi scheduler: if `zk_address` is not None, the cluster will use the zk to do scheduler leader election
+    pub zk_address: Option<String>,
+    /// Zk session timeout
+    pub zk_session_timeout: u64,
+    /// The path for leader election
+    pub zk_leader_election_path: Option<String>,
+    /// The path used to store leader scheduler address
+    pub zk_leader_host_path: Option<String>,
 }
 
 impl Default for SchedulerConfig {
@@ -72,6 +80,10 @@ impl Default for SchedulerConfig {
             job_resubmit_interval_ms: None,
             executor_termination_grace_period: 0,
             scheduler_event_expected_processing_duration: 0,
+            zk_address: None,
+            zk_session_timeout: 60,
+            zk_leader_election_path: None,
+            zk_leader_host_path: None,
         }
     }
 }
@@ -155,7 +167,7 @@ impl SchedulerConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClusterStorageConfig {
     Memory,
     #[cfg(feature = "etcd")]

@@ -272,6 +272,27 @@ impl ClusterState for InMemoryClusterState {
     fn get_executor_heartbeat(&self, executor_id: &str) -> Option<ExecutorHeartbeat> {
         self.heartbeats.get(executor_id).map(|r| r.value().clone())
     }
+
+    async fn clean_up_cluster_state(&self) {
+        {
+            let mut guard = self.task_slots.lock().await;
+            info!("Clear task slots, the previous size is {}", guard.len());
+            guard.clear();
+        }
+        // clear up executor metadata
+        info!(
+            "Clear executor metadata map, the previous size is {}",
+            self.executors.len()
+        );
+        self.executors.clear();
+
+        // clean heart beat
+        info!(
+            "Clear executor heartbeat map, the previous size is {}",
+            self.heartbeats.len()
+        );
+        self.heartbeats.clear();
+    }
 }
 
 /// Implementation of `JobState` which keeps all state in memory. If using `InMemoryJobState`
@@ -474,5 +495,17 @@ impl JobState for InMemoryJobState {
                 "Could not fail unscheduler job {job_id}, job not found in queued jobs"
             )))
         }
+    }
+
+    fn clean_up_session(&self) {
+        info!("Clean up all session for {:?}", self.scheduler);
+        self.sessions.clear();
+    }
+
+    fn clean_up_jobs_and_tasks(&self) {
+        info!("Clean up all jobs and tasks for {:?}, completed jobs: {:?}, running jobs: {:?}, queued jobs: {:?}", self.scheduler, self.completed_jobs.len(), self.running_jobs.len(), self.queued_jobs.len());
+        self.completed_jobs.clear();
+        self.running_jobs.clear();
+        self.queued_jobs.clear();
     }
 }

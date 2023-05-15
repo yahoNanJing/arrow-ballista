@@ -127,6 +127,10 @@ async fn main() -> Result<()> {
         executor_termination_grace_period: opt.executor_termination_grace_period,
         scheduler_event_expected_processing_duration: opt
             .scheduler_event_expected_processing_duration,
+        zk_address: opt.zk_address,
+        zk_session_timeout: opt.zk_session_timeout,
+        zk_leader_election_path: opt.zk_leader_election_path,
+        zk_leader_host_path: opt.zk_leader_host_path,
     };
 
     let cluster = BallistaCluster::new_from_config(&config).await?;

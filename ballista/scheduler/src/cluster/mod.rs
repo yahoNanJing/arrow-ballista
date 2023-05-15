@@ -252,6 +252,10 @@ pub trait ClusterState: Send + Sync + 'static {
 
     /// Get executor heartbeat for the provided executor ID. Return None if the executor does not exist
     fn get_executor_heartbeat(&self, executor_id: &str) -> Option<ExecutorHeartbeat>;
+
+    /// clean the state of the cluster
+    /// delete all state of executors and heartbeat
+    async fn clean_up_cluster_state(&self);
 }
 
 /// Events related to the state of jobs. Implementations may or may not support all event types.
@@ -355,12 +359,18 @@ pub trait JobState: Send + Sync {
         config: &BallistaConfig,
     ) -> Result<Arc<SessionContext>>;
 
-    // Update a new saved session. If the session does not exist, a new one will be created
+    /// Update a new saved session. If the session does not exist, a new one will be created
     async fn update_session(
         &self,
         session_id: &str,
         config: &BallistaConfig,
     ) -> Result<Arc<SessionContext>>;
+
+    /// clean up all session info
+    fn clean_up_session(&self);
+
+    /// clean up all jobs and tasks info
+    fn clean_up_jobs_and_tasks(&self);
 }
 
 pub(crate) async fn bind_task_bias(

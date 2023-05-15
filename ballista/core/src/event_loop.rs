@@ -15,17 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{error, info};
+use log::{error, info, warn};
 use tokio::sync::mpsc;
 
 use crate::error::{BallistaError, Result};
 
 #[async_trait]
-pub trait EventAction<E>: Send + Sync {
+pub trait EventAction<E: Debug>: Send + Sync {
     fn on_start(&self);
 
     fn on_stop(&self);
@@ -41,7 +42,7 @@ pub trait EventAction<E>: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct EventLoop<E> {
+pub struct EventLoop<E: Debug> {
     pub name: String,
     pub buffer_size: usize,
     stopped: Arc<AtomicBool>,
@@ -49,7 +50,7 @@ pub struct EventLoop<E> {
     tx_event: Option<mpsc::Sender<E>>,
 }
 
-impl<E: Send + 'static> EventLoop<E> {
+impl<E: Send + 'static + Debug> EventLoop<E> {
     pub fn new(
         name: String,
         buffer_size: usize,
@@ -75,15 +76,23 @@ impl<E: Send + 'static> EventLoop<E> {
         let action = self.action.clone();
         tokio::spawn(async move {
             info!("Starting the event loop {}", name);
-            while !stopped.load(Ordering::SeqCst) {
-                if let Some(event) = rx_event.recv().await {
-                    if let Err(e) = action.on_receive(event, &tx_event, &rx_event).await {
-                        error!("Fail to process event due to {}", e);
-                        action.on_error(e);
-                    }
-                } else {
-                    info!("Event Channel closed, shutting down");
-                    break;
+            loop {
+                tokio::select! {
+                    Some(event) = rx_event.recv() => {
+                        // TODO: if this scheduler is not the leader
+                        if stopped.load(Ordering::SeqCst) {
+                            warn!("The event loop was stopped, but receive an event, ignore this event {:?}", event);
+                        } else {
+                            if let Err(e) = action.on_receive(event, &tx_event, &mut rx_event).await {
+                                error!("Fail to process event due to {}", e);
+                                action.on_error(e);
+                            }
+                        }
+                    },
+                    else => {
+                        info!("Event Channel closed, shutting down");
+                        break;
+                    },
                 }
             }
             info!("The event loop {} has been stopped", name);
@@ -114,12 +123,28 @@ impl<E: Send + 'static> EventLoop<E> {
         }
     }
 
+    pub fn restart(&mut self) {
+        if !self.stopped.load(Ordering::SeqCst) {
+            warn!("The event loop has not been set to stop, and can't restart it");
+        } else if self.stopped.swap(false, Ordering::SeqCst) {
+            self.action.on_start();
+        } else {
+            warn!("Failed to swap the stopped value to [false]");
+        }
+    }
+
     pub fn get_sender(&self) -> Result<EventSender<E>> {
-        Ok(EventSender {
-            tx_event: self.tx_event.as_ref().cloned().ok_or_else(|| {
-                BallistaError::General("Event sender not exist!!!".to_string())
-            })?,
-        })
+        if self.stopped.load(Ordering::SeqCst) {
+            Err(BallistaError::General(
+                "Event loop has stopped!!".to_string(),
+            ))
+        } else {
+            Ok(EventSender {
+                tx_event: self.tx_event.as_ref().cloned().ok_or_else(|| {
+                    BallistaError::General("Event sender not exist!!!".to_string())
+                })?,
+            })
+        }
     }
 }
 

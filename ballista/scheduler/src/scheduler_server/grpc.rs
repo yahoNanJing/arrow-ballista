@@ -150,6 +150,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<RegisterExecutorParams>,
     ) -> Result<Response<RegisterExecutorResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let remote_addr = request.remote_addr();
         if let RegisterExecutorParams {
             metadata: Some(metadata),
@@ -186,6 +188,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<HeartBeatParams>,
     ) -> Result<Response<HeartBeatResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let remote_addr = request.remote_addr();
         let HeartBeatParams {
             executor_id,
@@ -255,6 +259,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<UpdateTaskStatusParams>,
     ) -> Result<Response<UpdateTaskStatusResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let UpdateTaskStatusParams {
             executor_id,
             task_status,
@@ -283,6 +289,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<GetFileMetadataParams>,
     ) -> Result<Response<GetFileMetadataResult>, Status> {
+        self.check_scheduler_leader()?;
+
         // Here, we use the default config, since we don't know the session id
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
@@ -339,6 +347,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<ExecuteQueryParams>,
     ) -> Result<Response<ExecuteQueryResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let query_params = request.into_inner();
         if let ExecuteQueryParams {
             query: Some(query),
@@ -471,6 +481,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<GetJobStatusParams>,
     ) -> Result<Response<GetJobStatusResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let job_id = request.into_inner().job_id;
         trace!("Received get_job_status request for job {}", job_id);
         match self.state.task_manager.get_job_status(&job_id).await {
@@ -487,6 +499,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<ExecutorStoppedParams>,
     ) -> Result<Response<ExecutorStoppedResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let ExecutorStoppedParams {
             executor_id,
             reason,
@@ -518,6 +532,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<CancelJobParams>,
     ) -> Result<Response<CancelJobResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let job_id = request.into_inner().job_id;
         info!("Received cancellation request for job {}", job_id);
 
@@ -542,6 +558,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<CleanJobDataParams>,
     ) -> Result<Response<CleanJobDataResult>, Status> {
+        self.check_scheduler_leader()?;
+
         let job_id = request.into_inner().job_id;
         info!("Received clean data request for job {}", job_id);
 
