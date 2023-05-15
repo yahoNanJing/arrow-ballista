@@ -192,11 +192,23 @@ impl ObjectStoreRegistry for BallistaObjectStoreRegistry {
 pub struct CachedBasedObjectStoreRegistry {
     inner: Arc<dyn ObjectStoreRegistry>,
     cache_layer: CacheLayer,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl CachedBasedObjectStoreRegistry {
     pub fn new(inner: Arc<dyn ObjectStoreRegistry>, cache_layer: CacheLayer) -> Self {
-        Self { inner, cache_layer }
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            // TODO make it configurable
+            .worker_threads(40)
+            .thread_name("Cache-loading")
+            .build()
+            .unwrap();
+        Self {
+            inner,
+            cache_layer,
+            runtime,
+        }
     }
 }
 
@@ -216,12 +228,20 @@ impl ObjectStoreRegistry for CachedBasedObjectStoreRegistry {
             source_object_store,
         ));
         Ok(match &self.cache_layer {
-            CacheLayer::LocalDiskFile(cache_layer) => Arc::new(
-                FileCacheObjectStore::new(cache_layer.clone(), object_store_with_key),
-            ),
-            CacheLayer::LocalMemoryFile(cache_layer) => Arc::new(
-                FileCacheObjectStore::new(cache_layer.clone(), object_store_with_key),
-            ),
+            CacheLayer::LocalDiskFile(cache_layer) => {
+                Arc::new(FileCacheObjectStore::new(
+                    cache_layer.clone(),
+                    object_store_with_key,
+                    self.runtime.handle().clone(),
+                ))
+            }
+            CacheLayer::LocalMemoryFile(cache_layer) => {
+                Arc::new(FileCacheObjectStore::new(
+                    cache_layer.clone(),
+                    object_store_with_key,
+                    self.runtime.handle().clone(),
+                ))
+            }
         })
     }
 }

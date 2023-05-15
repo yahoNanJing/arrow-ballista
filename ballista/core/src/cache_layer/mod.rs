@@ -97,6 +97,7 @@ mod tests {
         let cache_object_store = FileCacheObjectStore::new(
             Arc::new(cache_layer),
             source_object_store_with_key.clone(),
+            tokio::runtime::Handle::current(),
         );
         let actual_cache = cache_object_store.get(&source_location).await.unwrap();
         match actual_cache {
