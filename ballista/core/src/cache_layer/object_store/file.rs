@@ -38,7 +38,6 @@ where
 {
     cache_layer: Arc<FileCacheLayer<M>>,
     inner: Arc<ObjectStoreWithKey>,
-    handle: tokio::runtime::Handle,
 }
 
 impl<M> FileCacheObjectStore<M>
@@ -48,13 +47,8 @@ where
     pub fn new(
         cache_layer: Arc<FileCacheLayer<M>>,
         inner: Arc<ObjectStoreWithKey>,
-        handle: tokio::runtime::Handle,
     ) -> Self {
-        Self {
-            cache_layer,
-            inner,
-            handle,
-        }
+        Self { cache_layer, inner }
     }
 }
 
@@ -122,10 +116,9 @@ where
             let cache_layer = self.cache_layer.clone();
             let key = location.clone();
             let extra = self.inner.clone();
-            self.handle.spawn(async move {
+            tokio::spawn(async move {
                 info!("Going to cache data for {}", key);
-                cache_layer.cache().get(key.clone(), extra).await;
-                info!("Data for {} has been cached", key);
+                cache_layer.cache().get(key, extra).await;
             });
             self.inner.get(location).await
         }
@@ -152,10 +145,9 @@ where
             let cache_layer = self.cache_layer.clone();
             let key = location.clone();
             let extra = self.inner.clone();
-            self.handle.spawn(async move {
+            tokio::spawn(async move {
                 info!("Going to cache data for {}", key);
-                cache_layer.cache().get(key.clone(), extra).await;
-                info!("Data for {} has been cached", key);
+                cache_layer.cache().get(key, extra).await;
             });
             self.inner.get_range(location, range).await
         }
