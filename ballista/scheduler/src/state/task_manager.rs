@@ -29,7 +29,6 @@ use crate::cluster::JobState;
 use ballista_core::serde::protobuf::{
     JobStatus, MultiTaskDefinition, TaskDefinition, TaskId, TaskStatus,
 };
-use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
 use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::BallistaCodec;
 use dashmap::DashMap;
@@ -467,9 +466,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
                 plan_buf
             };
 
-            let output_partitioning =
-                hash_partitioning_to_proto(task.output_partitioning.as_ref())?;
-
             let task_definition = TaskDefinition {
                 task_id: task.task_id as u32,
                 task_attempt_num: task.task_attempt as u32,
@@ -478,7 +474,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
                 stage_attempt_num: task.stage_attempt_num as u32,
                 partition_id: task.partition.partition_id as u32,
                 plan,
-                output_partitioning,
                 session_id: task.session_id,
                 launch_time: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -550,8 +545,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
 
                     plan_buf
                 };
-                let output_partitioning =
-                    hash_partitioning_to_proto(task.output_partitioning.as_ref())?;
 
                 let task_ids = tasks
                     .iter()
@@ -568,7 +561,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
                     stage_id: stage_id as u32,
                     stage_attempt_num: stage_attempt_num as u32,
                     plan,
-                    output_partitioning,
                     session_id,
                     launch_time: SystemTime::now()
                         .duration_since(UNIX_EPOCH)

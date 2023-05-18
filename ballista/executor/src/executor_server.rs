@@ -48,10 +48,7 @@ use ballista_core::utils::{create_grpc_client_connection, create_grpc_server};
 use dashmap::DashMap;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_proto::{
-    logical_plan::AsLogicalPlan,
-    physical_plan::{from_proto::parse_protobuf_hash_partitioning, AsExecutionPlan},
-};
+use datafusion_proto::{logical_plan::AsLogicalPlan, physical_plan::AsExecutionPlan};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
 
@@ -412,12 +409,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 )
             })?;
 
-        let shuffle_output_partitioning = parse_protobuf_hash_partitioning(
-            task.output_partitioning.as_ref(),
-            task_context.as_ref(),
-            plan.schema().as_ref(),
-        )?;
-
         let task_id = task.task_id;
         let job_id = task.job_id;
         let stage_id = task.stage_id;
@@ -445,7 +436,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 part.clone(),
                 query_stage_exec.clone(),
                 task_context,
-                shuffle_output_partitioning,
             )
             .await;
         info!("Done with task {}", task_identity);

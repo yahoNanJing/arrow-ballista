@@ -286,7 +286,6 @@ impl TryInto<TaskDefinition> for protobuf::TaskDefinition {
             stage_attempt_num: self.stage_attempt_num as usize,
             partition_id: self.partition_id as usize,
             plan: self.plan,
-            output_partitioning: self.output_partitioning,
             session_id: self.session_id,
             launch_time: self.launch_time,
             props,
@@ -304,7 +303,6 @@ impl TryInto<Vec<TaskDefinition>> for protobuf::MultiTaskDefinition {
         }
 
         let plan = self.plan;
-        let output_partitioning = self.output_partitioning;
         let session_id = self.session_id;
         let job_id = self.job_id;
         let stage_id = self.stage_id as usize;
@@ -322,7 +320,6 @@ impl TryInto<Vec<TaskDefinition>> for protobuf::MultiTaskDefinition {
                 stage_attempt_num,
                 partition_id: task_id.partition_id as usize,
                 plan: plan.clone(),
-                output_partitioning: output_partitioning.clone(),
                 session_id: session_id.clone(),
                 launch_time,
                 props: props.clone(),
