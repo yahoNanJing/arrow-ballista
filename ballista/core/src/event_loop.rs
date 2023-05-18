@@ -123,7 +123,7 @@ impl<E: Send + 'static + Debug> EventLoop<E> {
         }
     }
 
-    pub fn restart(&mut self) {
+    pub fn restart(&self) {
         if !self.stopped.load(Ordering::SeqCst) {
             warn!("The event loop has not been set to stop, and can't restart it");
         } else if self.stopped.swap(false, Ordering::SeqCst) {

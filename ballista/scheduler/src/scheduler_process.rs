@@ -23,6 +23,7 @@ use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
 use log::{info, warn};
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::thread;
 use std::time::Duration;
 use tonic::transport::server::Connected;
 use tower::Service;
@@ -99,11 +100,14 @@ pub async fn start_server(
             zk_session_timeout,
             zk_address,
             listener,
-        );
-        tokio::spawn(async move {
-            info!("Starting zk leader election");
-            zk_leader_election.start_election().await;
-        });
+        )?;
+
+        thread::Builder::new()
+            .name("zk-leader-election".to_string())
+            .spawn(move || {
+                info!("Starting zk leader election");
+                zk_leader_election.start_election();
+            })?;
     } else {
         warn!(
             "Can't use the zk to do leader election: {:?}, {:?}, {:?}, {:?}, {:?}",

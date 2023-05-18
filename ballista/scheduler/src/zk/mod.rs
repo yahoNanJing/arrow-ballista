@@ -1,13 +1,14 @@
 use crate::scheduler_server::SchedulerServer;
+use anyhow::Result;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use log::{info, warn};
 use std::fmt::{Debug, Formatter};
-use std::iter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::time::sleep;
+use std::{iter, thread};
+use tokio::runtime::Runtime;
 use zookeeper::recipes::leader::LeaderLatch;
 use zookeeper::{
     Acl, CreateMode, WatchedEvent, Watcher, ZkError, ZkResult, ZkState, ZooKeeper,
@@ -17,22 +18,22 @@ use zookeeper::{
 pub trait SchedulerStateChangeListener: Send + Sync {
     /// The scheduler changed from leader to follower,
     /// the leader election service call this function and make all listener to be a follower state
-    async fn change_to_follower(&mut self);
+    async fn change_to_follower(&self);
     /// The scheduler changed from follower to leader,
     /// the leader election service call this function and make all listener to be a leader state
-    async fn change_to_leader(&mut self);
+    async fn change_to_leader(&self);
 }
 
 #[tonic::async_trait]
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     SchedulerStateChangeListener for SchedulerServer<T, U>
 {
-    async fn change_to_follower(&mut self) {
+    async fn change_to_follower(&self) {
         info!("Prepare to change to the follower: stop the scheduler service");
         self.stop_service().await;
     }
 
-    async fn change_to_leader(&mut self) {
+    async fn change_to_leader(&self) {
         info!("Prepare to change to the leader: restart the scheduler service");
         self.restart_service().await;
     }
@@ -60,6 +61,7 @@ pub struct SchedulerZkLeaderService {
     zk_address: String,
     listener: Box<dyn SchedulerStateChangeListener>,
     wait_time: Duration,
+    rt: Runtime,
 }
 
 impl Debug for SchedulerZkLeaderService {
@@ -87,11 +89,15 @@ impl SchedulerZkLeaderService {
         zk_session_timeout: Duration,
         zk_address: String,
         listener: Box<dyn SchedulerStateChangeListener>,
-    ) -> Self {
+    ) -> Result<Self> {
         let rand = rand::random::<f32>();
         let wait_time = (zk_session_timeout.as_secs() as f32 * (1.0 + rand)) as u64;
         let wait_time = Duration::from_secs(wait_time);
-        SchedulerZkLeaderService {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        let service = SchedulerZkLeaderService {
             leader_host_path,
             leader_election_path,
             current_scheduler_address,
@@ -104,11 +110,13 @@ impl SchedulerZkLeaderService {
             zk_address,
             listener,
             wait_time,
-        }
+            rt,
+        };
+        Ok(service)
     }
 
-    async fn sleep_wait(&self) {
-        sleep(self.wait_time).await;
+    fn sleep_wait(&self) {
+        thread::sleep(self.wait_time);
     }
 
     fn is_leader(&self) -> bool {
@@ -140,9 +148,10 @@ impl SchedulerZkLeaderService {
         Ok(())
     }
 
-    async fn change_to_leader(&mut self) {
+    fn change_to_leader(&self) {
+        info!("Begin to change scheduler to leader");
         // change state of the listener
-        self.listener.change_to_leader().await;
+        self.rt.block_on(self.listener.change_to_leader());
 
         let zk = self.zk_client.as_ref().unwrap();
         let data = self.current_scheduler_address.as_bytes().to_vec();
@@ -194,9 +203,10 @@ impl SchedulerZkLeaderService {
         self.is_leader.store(true, Ordering::SeqCst);
     }
 
-    async fn change_to_follower(&mut self) {
+    fn change_to_follower(&self) {
+        info!("Begin to change scheduler to follower");
         // change state of the listener
-        self.listener.change_to_follower().await;
+        self.rt.block_on(self.listener.change_to_follower());
         // from `true` to `false`
         info!(
             "The scheduler {:?} changed from leader to follower with id {:?}",
@@ -205,7 +215,7 @@ impl SchedulerZkLeaderService {
         self.is_leader.store(false, Ordering::SeqCst);
     }
 
-    async fn create_zk_connection(&self) -> Arc<ZooKeeper> {
+    fn create_zk_connection(&self) -> Arc<ZooKeeper> {
         loop {
             match ZooKeeper::connect(
                 &self.zk_address,
@@ -235,7 +245,7 @@ impl SchedulerZkLeaderService {
                 }
             }
             warn!("Wait and retry to create the zk connection");
-            self.sleep_wait().await;
+            self.sleep_wait();
         }
     }
 
@@ -267,14 +277,14 @@ impl SchedulerZkLeaderService {
         };
     }
 
-    async fn connect_and_leader_election(&mut self) {
+    fn connect_and_leader_election(&mut self) {
         // make sure both the connection of zk and leader election are ready.
         // if one of them is not ready, need to retry it until success.
-        let zk = self.create_zk_connection().await;
+        let zk = self.create_zk_connection();
         let mut start_election = self.create_leader_latch(zk);
         while !start_election {
-            self.sleep_wait().await;
-            let zk = self.create_zk_connection().await;
+            self.sleep_wait();
+            let zk = self.create_zk_connection();
             start_election = self.create_leader_latch(zk);
         }
 
@@ -298,7 +308,7 @@ impl SchedulerZkLeaderService {
         });
     }
 
-    fn change_connection_state(&mut self, is_connect: bool) {
+    fn change_connection_state(&self, is_connect: bool) {
         self.zk_is_connected.store(is_connect, Ordering::SeqCst);
     }
 
@@ -313,19 +323,19 @@ impl SchedulerZkLeaderService {
         self.id = Some(id);
     }
 
-    pub async fn start_election(&mut self) {
+    pub fn start_election(&mut self) {
         info!(
             "The scheduler {} start the leader election",
             self.current_scheduler_address
         );
         // change to follower first
-        self.change_to_follower().await;
+        self.change_to_follower();
 
         loop {
             let is_connected = self.is_zk_connected();
             if !is_connected {
                 // this scheduler is not connected to the zk
-                self.connect_and_leader_election().await;
+                self.connect_and_leader_election();
                 // to the next loop quickly
                 continue;
             } else {
@@ -333,16 +343,16 @@ impl SchedulerZkLeaderService {
                 match (self.is_leader(), leader_latch.has_leadership()) {
                     (true, false) => {
                         // leader -> follower
-                        self.change_to_follower().await;
+                        self.change_to_follower();
                     }
                     (false, true) => {
                         // follower -> leader
-                        self.change_to_leader().await;
+                        self.change_to_leader();
                     }
                     _ => {}
                 }
             }
-            self.sleep_wait().await;
+            self.sleep_wait();
         }
     }
 }

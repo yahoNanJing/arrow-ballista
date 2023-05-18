@@ -219,6 +219,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         let termination_grace_period = self.executor_termination_grace_period;
         let stop_capture = self.stopped.clone();
         tokio::task::spawn(async move {
+            info!("Start the expire dead executor server");
             loop {
                 if !stop_capture.load(Ordering::SeqCst) {
                     let expired_executors = state
@@ -267,11 +268,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                                 .await;
                         }
                     }
-                    tokio::time::sleep(Duration::from_secs(
-                        EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS,
-                    ))
-                    .await;
                 }
+                tokio::time::sleep(Duration::from_secs(
+                    EXPIRE_DEAD_EXECUTOR_INTERVAL_SECS,
+                ))
+                .await;
             }
         });
         Ok(())
@@ -343,7 +344,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         }
     }
 
-    pub(crate) async fn restart_service(&mut self) {
+    pub(crate) async fn restart_service(&self) {
         if !self.stopped.load(Ordering::SeqCst) {
             warn!(
                 "The scheduler server has not been stopped, and don't need to restart it"
