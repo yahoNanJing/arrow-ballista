@@ -25,7 +25,6 @@ use std::result;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::client::BallistaClient;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -43,11 +42,12 @@ use datafusion::physical_plan::{
 use futures::{Stream, StreamExt, TryStreamExt};
 
 use crate::error::BallistaError;
+use crate::execution_plans::shuffle_reader_pool::SHUFFLE_READER_POOL;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::common::AbortOnDropMany;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use itertools::Itertools;
-use log::{error, info};
+use log::{error, info, warn};
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
 use tokio::sync::{mpsc, Semaphore};
@@ -357,12 +357,14 @@ async fn fetch_partition_remote(
 ) -> result::Result<SendableRecordBatchStream, BallistaError> {
     let metadata = &location.executor_meta;
     let partition_id = &location.partition_id;
-    // TODO for shuffle client connections, we should avoid creating new connections again and again.
-    // And we should also avoid to keep alive too many connections for long time.
     let host = metadata.host.as_str();
     let port = metadata.port;
+
+    //Get cache connection from executor global cache
+    let addr: Arc<str> = Arc::from(format!("http://{}:{}", host, port));
     let mut ballista_client =
-        BallistaClient::try_new(host, port)
+        SHUFFLE_READER_POOL
+            .connect(addr.clone())
             .await
             .map_err(|error| match error {
                 // map grpc connection error to partition fetch error.
@@ -375,9 +377,20 @@ async fn fetch_partition_remote(
                 other => other,
             })?;
 
-    ballista_client
+    let res = ballista_client
         .fetch_partition(&metadata.id, partition_id, &location.path, host, port)
-        .await
+        .await;
+    // If fetch error invalidate cache connection
+    if res.is_err() {
+        warn!(
+            "Fetching partition fail try to invalidate connection: {}",
+            addr.clone()
+        );
+        SHUFFLE_READER_POOL
+            .invalidate_connection(addr.clone())
+            .await;
+    }
+    res
 }
 
 async fn fetch_partition_local(
@@ -543,10 +556,8 @@ mod tests {
 
         // BallistaError::FetchFailed -> ArrowError::ExternalError -> ballistaError::FetchFailed
         let ballista_error = batches.unwrap_err();
-        assert!(matches!(
-            ballista_error,
-            BallistaError::FetchFailed(_, _, _, _)
-        ));
+        println!("{}", ballista_error);
+        assert!(matches!(ballista_error, BallistaError::FetchFailed(..)));
 
         Ok(())
     }

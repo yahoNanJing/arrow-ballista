@@ -20,6 +20,7 @@
 
 mod distributed_query;
 mod shuffle_reader;
+mod shuffle_reader_pool;
 mod shuffle_writer;
 mod unresolved_shuffle;
 
