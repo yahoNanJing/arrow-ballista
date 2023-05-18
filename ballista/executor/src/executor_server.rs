@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 
 use log::{debug, error, info, warn};
 use tonic::transport::Channel;
@@ -58,6 +58,7 @@ use crate::cpu_bound_executor::DedicatedExecutor;
 use crate::execution_engine::QueryStageExecutor;
 use crate::executor::Executor;
 use crate::shutdown::ShutdownNotifier;
+use crate::zk::ExecutorZkService;
 use crate::{as_task_status, TaskExecutionTimes};
 
 type ServerHandle = JoinHandle<Result<(), BallistaError>>;
@@ -83,12 +84,13 @@ struct CuratorTaskStatus {
 }
 
 pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
-    mut scheduler: SchedulerGrpcClient<Channel>,
+    mut scheduler: Option<SchedulerGrpcClient<Channel>>,
     bind_host: String,
     executor: Arc<Executor>,
     codec: BallistaCodec<T, U>,
     stop_send: mpsc::Sender<bool>,
     shutdown_noti: &ShutdownNotifier,
+    zk_service: Option<ExecutorZkService>,
 ) -> Result<ServerHandle, BallistaError> {
     let channel_buf_size = executor.concurrent_tasks * 50;
     let (tx_task, rx_task) = mpsc::channel::<CuratorTaskDefinition>(channel_buf_size);
@@ -105,6 +107,29 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
         },
         codec,
     );
+
+    let use_zk_to_register = match zk_service {
+        None => {
+            info!("Start up without zk service");
+            false
+        }
+        Some(mut zk_service) => {
+            info!("Start up with zk service");
+            let listener = Box::new(executor_server.clone());
+            zk_service.with_executor_change_listener(listener);
+            let zk_watch_service_shutdown = shutdown_noti.subscribe_for_shutdown();
+            let zk_watch_service_complete = shutdown_noti.shutdown_complete_tx.clone();
+            tokio::spawn(async move {
+                zk_service
+                    .start_watch_scheduler(
+                        zk_watch_service_shutdown,
+                        zk_watch_service_complete,
+                    )
+                    .await;
+            });
+            true
+        }
+    };
 
     // 1. Start executor grpc service
     let server = {
@@ -130,20 +155,22 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
         })
     };
 
-    // 2. Do executor registration
-    // TODO the executor registration should happen only after the executor grpc server started.
     let executor_server = Arc::new(executor_server);
-    match register_executor(&mut scheduler, executor.clone()).await {
-        Ok(_) => {
-            info!("Executor registration succeed");
-        }
-        Err(error) => {
-            error!("Executor registration failed due to: {}", error);
-            // abort the Executor Grpc Future
-            server.abort();
-            return Err(error);
-        }
-    };
+    if !use_zk_to_register {
+        // 2. Do executor registration
+        // TODO the executor registration should happen only after the executor grpc server started.
+        match register_executor(scheduler.as_mut().unwrap(), executor.clone()).await {
+            Ok(_) => {
+                info!("Executor registration succeed");
+            }
+            Err(error) => {
+                error!("Executor registration failed due to: {}", error);
+                // abort the Executor Grpc Future
+                server.abort();
+                return Err(error);
+            }
+        };
+    }
 
     // 3. Start Heartbeater loop
     {
@@ -185,8 +212,10 @@ pub struct ExecutorServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPl
     executor: Arc<Executor>,
     executor_env: ExecutorEnv,
     codec: BallistaCodec<T, U>,
-    scheduler_to_register: SchedulerGrpcClient<Channel>,
+    scheduler_to_register: Option<SchedulerGrpcClient<Channel>>,
     schedulers: SchedulerClients,
+    pub(crate) scheduler_from_zk:
+        Arc<RwLock<Option<(String, SchedulerGrpcClient<Channel>)>>>,
 }
 
 #[derive(Clone)]
@@ -207,7 +236,7 @@ pub static TERMINATING: AtomicBool = AtomicBool::new(false);
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T, U> {
     fn new(
-        scheduler_to_register: SchedulerGrpcClient<Channel>,
+        scheduler_to_register: Option<SchedulerGrpcClient<Channel>>,
         executor: Arc<Executor>,
         executor_env: ExecutorEnv,
         codec: BallistaCodec<T, U>,
@@ -222,6 +251,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             codec,
             scheduler_to_register,
             schedulers: Default::default(),
+            scheduler_from_zk: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -264,21 +294,53 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             }),
             metadata: Some(self.executor.metadata.clone()),
         };
-        let mut scheduler = self.scheduler_to_register.clone();
-        match scheduler
-            .heart_beat_from_executor(heartbeat_params.clone())
-            .await
+
+        // send the heartbeat to the scheduler which is got from zk service
         {
-            Ok(_) => {
-                return;
+            let read = self.scheduler_from_zk.read().await;
+            // send the heart beat to the current scheduler
+            if !read.is_none() {
+                let (scheduler_url, zk_scheduler) = read.as_ref().unwrap();
+                let mut mut_scheduler = zk_scheduler.clone();
+                match mut_scheduler
+                    .heart_beat_from_executor(heartbeat_params.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        return;
+                    }
+                    Err(e) => {
+                        warn!("Fail to update heartbeat to the scheduler {:?} found by zk service due to {:?}", scheduler_url, e);
+                        return;
+                    }
+                };
+            } else {
+                info!("There is no zk scheduler, and skip update heartbeat to the zk scheduler");
             }
-            Err(e) => {
-                warn!(
+        }
+
+        let mut scheduler = self.scheduler_to_register.clone();
+        match scheduler {
+            None => {
+                info!("There is no registered scheduler, and skip update heartbeat to the scheduler");
+            }
+            Some(ref mut scheduler) => {
+                match scheduler
+                    .heart_beat_from_executor(heartbeat_params.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(
                     "Fail to update heartbeat to its registration scheduler due to {:?}",
                     e
                 );
+                    }
+                };
             }
-        };
+        }
 
         for mut item in self.schedulers.iter_mut() {
             let scheduler_id = item.key().clone();
@@ -468,6 +530,33 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         };
         let executor_metrics = vec![available_memory];
         executor_metrics
+    }
+
+    pub(crate) async fn register_to_new_scheduler(
+        &self,
+        new_scheduler_client: &mut SchedulerGrpcClient<Channel>,
+        new_scheduler_url: &String,
+    ) -> Result<(), BallistaError> {
+        match register_executor(new_scheduler_client, self.executor.clone()).await {
+            Ok(_) => {
+                info!(
+                    "Executor register to the new scheduler successfully: {:?}",
+                    new_scheduler_url
+                );
+                Ok(())
+            }
+            Err(error) => {
+                error!(
+                    "Executor failed to register to the new scheduler, due to: {}",
+                    error
+                );
+                Err(error)
+            }
+        }
+    }
+
+    pub(crate) fn clear_executor_tasks(&self) {
+        self.executor.clear_all_tasks();
     }
 }
 

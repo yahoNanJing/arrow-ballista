@@ -30,6 +30,7 @@ pub mod terminate;
 
 mod cpu_bound_executor;
 mod standalone;
+mod zk;
 
 pub use standalone::new_standalone_executor;
 

@@ -32,6 +32,7 @@ use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::udf::ScalarUDF;
 use datafusion::physical_plan::Partitioning;
 use futures::future::AbortHandle;
+use log::{debug, info};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -173,6 +174,19 @@ impl Executor {
 
     pub fn active_task_count(&self) -> usize {
         self.abort_handles.len()
+    }
+
+    pub fn clear_all_tasks(&self) {
+        info!(
+            "Clear all executor tasks, the number of tasks: {:?}",
+            self.abort_handles.len()
+        );
+        // mark abort for all task
+        self.abort_handles.iter().for_each(|task| {
+            debug!("Abort task: {:?}", task.key());
+            task.value().abort();
+        });
+        self.abort_handles.clear()
     }
 }
 

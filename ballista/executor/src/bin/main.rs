@@ -83,6 +83,9 @@ async fn main() -> Result<()> {
         cache_dir: opt.cache_dir,
         cache_capacity: opt.cache_capacity,
         execution_engine: None,
+        zk_address: opt.zk_address,
+        zk_session_timeout: opt.zk_session_timeout,
+        zk_leader_host_path: opt.zk_leader_host_path,
     };
 
     start_executor_process(config).await

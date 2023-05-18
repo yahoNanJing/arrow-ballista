@@ -39,6 +39,7 @@ use uuid::Uuid;
 
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_proto::protobuf::{LogicalPlanNode, PhysicalPlanNode};
+use tonic::transport::Channel;
 
 use ballista_core::cache_layer::{
     medium::local_disk::LocalDiskMedium, policy::file::FileCacheLayer, CacheLayer,
@@ -69,8 +70,10 @@ use crate::metrics::LoggingMetricsCollector;
 use crate::shutdown::Shutdown;
 use crate::shutdown::ShutdownNotifier;
 use crate::terminate;
+use crate::zk::ExecutorZkService;
 use crate::{execution_loop, executor_server};
 
+#[derive(Clone)]
 pub struct ExecutorProcessConfig {
     pub bind_host: String,
     pub external_host: Option<String>,
@@ -97,11 +100,18 @@ pub struct ExecutorProcessConfig {
     /// Optional execution engine to use to execute physical plans, will default to
     /// DataFusion if none is provided.
     pub execution_engine: Option<Arc<dyn ExecutionEngine>>,
+    /// Use the zk to support multi scheduler: if `zk_address` is not None, the cluster will use the zk to do scheduler leader election
+    pub zk_address: Option<String>,
+    /// Zk session timeout
+    pub zk_session_timeout: u64,
+    /// The path used to store leader scheduler address
+    pub zk_leader_host_path: Option<String>,
 }
 
 pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
     let rust_log = env::var(EnvFilter::DEFAULT_ENV);
-    let log_filter = EnvFilter::new(rust_log.unwrap_or(opt.special_mod_log_level));
+    let log_filter =
+        EnvFilter::new(rust_log.unwrap_or(opt.special_mod_log_level.clone()));
     // File layer
     if let Some(log_dir) = &opt.log_dir {
         let log_file = match opt.log_rotation_policy {
@@ -148,11 +158,11 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         .parse()
         .with_context(|| format!("Could not parse address: {addr}"))?;
 
-    let scheduler_host = opt.scheduler_host;
-    let scheduler_port = opt.scheduler_port;
+    let scheduler_host = opt.scheduler_host.clone();
+    let scheduler_port = opt.scheduler_port.clone();
     let scheduler_url = format!("http://{scheduler_host}:{scheduler_port}");
 
-    let work_dir = opt.work_dir.unwrap_or(
+    let work_dir = opt.work_dir.clone().unwrap_or(
         TempDir::new()?
             .into_path()
             .into_os_string()
@@ -188,7 +198,7 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         }),
     };
 
-    let cache_dir = opt.cache_dir;
+    let cache_dir = opt.cache_dir.clone();
     let cache_capacity = opt.cache_capacity;
     let cache_layer: Option<CacheLayer> =
         opt.source_data_cache_policy
@@ -221,50 +231,10 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         runtime,
         metrics_collector,
         concurrent_tasks,
-        opt.execution_engine,
+        opt.execution_engine.clone(),
     ));
 
     let connect_timeout = opt.scheduler_connect_timeout_seconds as u64;
-    let connection = if connect_timeout == 0 {
-        create_grpc_client_connection(scheduler_url)
-            .await
-            .context("Could not connect to scheduler")
-    } else {
-        // this feature was added to support docker-compose so that we can have the executor
-        // wait for the scheduler to start, or at least run for 10 seconds before failing so
-        // that docker-compose's restart policy will restart the container.
-        let start_time = Instant::now().elapsed().as_secs();
-        let mut x = None;
-        while x.is_none()
-            && Instant::now().elapsed().as_secs() - start_time < connect_timeout
-        {
-            match create_grpc_client_connection(scheduler_url.clone())
-                .await
-                .context("Could not connect to scheduler")
-            {
-                Ok(conn) => {
-                    info!("Connected to scheduler at {}", scheduler_url);
-                    x = Some(conn);
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to connect to scheduler at {} ({}); retrying ...",
-                        scheduler_url, e
-                    );
-                    std::thread::sleep(time::Duration::from_millis(500));
-                }
-            }
-        }
-        match x {
-            Some(conn) => Ok(conn),
-            _ => Err(BallistaError::General(format!(
-                "Timed out attempting to connect to scheduler at {scheduler_url}"
-            ))
-            .into()),
-        }
-    }?;
-
-    let mut scheduler = SchedulerGrpcClient::new(connection);
 
     let default_codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
         BallistaCodec::default();
@@ -311,27 +281,65 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
     // Channels used to receive stop requests from Executor grpc service.
     let (stop_send, mut stop_recv) = mpsc::channel::<bool>(10);
 
-    match scheduler_policy {
+    let scheduler_client = match scheduler_policy {
         TaskSchedulingPolicy::PushStaged => {
-            service_handlers.push(
-                //If there is executor registration error during startup, return the error and stop early.
-                executor_server::startup(
-                    scheduler.clone(),
-                    opt.bind_host,
-                    executor.clone(),
-                    default_codec,
-                    stop_send,
-                    &shutdown_noti,
-                )
-                .await?,
-            );
+            if opt.zk_address.is_some()
+                && opt.zk_leader_host_path.is_some()
+                && opt.zk_session_timeout > 0
+            {
+                // use the zk to find and register to the leader scheduler
+                let zk_session_timeout = Duration::from_secs(opt.zk_session_timeout);
+                info!(
+                    "Use the zk service to find the scheduler: {:?}, {:?},  {:?}",
+                    opt.zk_address, opt.zk_leader_host_path, zk_session_timeout,
+                );
+                let zk_service = ExecutorZkService::new(
+                    opt.zk_leader_host_path.clone().unwrap(),
+                    zk_session_timeout,
+                    opt.zk_address.clone().unwrap(),
+                );
+                service_handlers.push(
+                    //If there is executor registration error during startup, return the error and stop early.
+                    executor_server::startup(
+                        None,
+                        opt.bind_host.clone(),
+                        executor.clone(),
+                        default_codec,
+                        stop_send,
+                        &shutdown_noti,
+                        Some(zk_service),
+                    )
+                    .await?,
+                );
+                None
+            } else {
+                let scheduler =
+                    create_scheduler_client(connect_timeout, scheduler_url).await?;
+                service_handlers.push(
+                    //If there is executor registration error during startup, return the error and stop early.
+                    executor_server::startup(
+                        Some(scheduler.clone()),
+                        opt.bind_host.clone(),
+                        executor.clone(),
+                        default_codec,
+                        stop_send,
+                        &shutdown_noti,
+                        None,
+                    )
+                    .await?,
+                );
+                Some(scheduler)
+            }
         }
         _ => {
+            let scheduler =
+                create_scheduler_client(connect_timeout, scheduler_url).await?;
             service_handlers.push(tokio::spawn(execution_loop::poll_loop(
                 scheduler.clone(),
                 executor.clone(),
                 default_codec,
             )));
+            Some(scheduler)
         }
     };
     service_handlers.push(tokio::spawn(flight_server_run(
@@ -369,50 +377,16 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
     info!("setting executor to TERMINATING status");
     TERMINATING.store(true, Ordering::Release);
 
-    if notify_scheduler {
-        // Send a heartbeat to update status of executor to `Fenced`. This should signal to the
-        // scheduler to no longer schedule tasks on this executor
-        if let Err(error) = scheduler
-            .heart_beat_from_executor(HeartBeatParams {
-                executor_id: executor_id.clone(),
-                metrics: vec![],
-                status: Some(ExecutorStatus {
-                    status: Some(Status::Terminating(String::default())),
-                }),
-                metadata: Some(ExecutorRegistration {
-                    id: executor_id.clone(),
-                    optional_host: opt
-                        .external_host
-                        .clone()
-                        .map(executor_registration::OptionalHost::Host),
-                    port: opt.port as u32,
-                    grpc_port: opt.grpc_port as u32,
-                    specification: Some(ExecutorSpecification {
-                        resources: vec![ExecutorResource {
-                            resource: Some(Resource::TaskSlots(concurrent_tasks as u32)),
-                        }],
-                    }),
-                }),
-            })
-            .await
-        {
-            error!("error sending heartbeat with fenced status: {:?}", error);
-        }
-
-        // TODO we probably don't need a separate rpc call for this....
-        if let Err(error) = scheduler
-            .executor_stopped(ExecutorStoppedParams {
-                executor_id,
-                reason: stop_reason,
-            })
-            .await
-        {
-            error!("ExecutorStopped grpc failed: {:?}", error);
-        }
-
-        // Wait for tasks to drain
-        tasks_drained.await;
-    }
+    terminate_executor(
+        notify_scheduler,
+        stop_reason,
+        concurrent_tasks,
+        scheduler_client,
+        opt.clone(),
+        executor_id,
+        tasks_drained,
+    )
+    .await;
 
     // Extract the `shutdown_complete` receiver and transmitter
     // explicitly drop `shutdown_transmitter`. This is important, as the
@@ -434,6 +408,115 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
     let _ = shutdown_complete_rx.recv().await;
     info!("Executor stopped.");
     Ok(())
+}
+
+async fn terminate_executor(
+    notify_scheduler: bool,
+    stop_reason: String,
+    concurrent_tasks: usize,
+    scheduler_client: Option<SchedulerGrpcClient<Channel>>,
+    opt: ExecutorProcessConfig,
+    executor_id: String,
+    tasks_drained: TasksDrainedFuture,
+) {
+    match scheduler_client {
+        None => {
+            info!("There is no scheduler client, no need to notify the scheduler when terminate executor")
+        }
+        Some(mut scheduler) => {
+            if notify_scheduler {
+                // Send a heartbeat to update status of executor to `Fenced`. This should signal to the
+                // scheduler to no longer schedule tasks on this executor
+                if let Err(error) = scheduler
+                    .heart_beat_from_executor(HeartBeatParams {
+                        executor_id: executor_id.clone(),
+                        metrics: vec![],
+                        status: Some(ExecutorStatus {
+                            status: Some(Status::Terminating(String::default())),
+                        }),
+                        metadata: Some(ExecutorRegistration {
+                            id: executor_id.clone(),
+                            optional_host: opt
+                                .external_host
+                                .clone()
+                                .map(executor_registration::OptionalHost::Host),
+                            port: opt.port as u32,
+                            grpc_port: opt.grpc_port as u32,
+                            specification: Some(ExecutorSpecification {
+                                resources: vec![ExecutorResource {
+                                    resource: Some(Resource::TaskSlots(
+                                        concurrent_tasks as u32,
+                                    )),
+                                }],
+                            }),
+                        }),
+                    })
+                    .await
+                {
+                    error!("error sending heartbeat with fenced status: {:?}", error);
+                }
+
+                // TODO we probably don't need a separate rpc call for this....
+                if let Err(error) = scheduler
+                    .executor_stopped(ExecutorStoppedParams {
+                        executor_id,
+                        reason: stop_reason,
+                    })
+                    .await
+                {
+                    error!("ExecutorStopped grpc failed: {:?}", error);
+                }
+
+                // Wait for tasks to drain
+                tasks_drained.await;
+            }
+        }
+    }
+}
+
+async fn create_scheduler_client(
+    connect_timeout: u64,
+    scheduler_url: String,
+) -> Result<SchedulerGrpcClient<Channel>> {
+    let connection = if connect_timeout == 0 {
+        create_grpc_client_connection(scheduler_url)
+            .await
+            .context("Could not connect to scheduler")
+    } else {
+        // this feature was added to support docker-compose so that we can have the executor
+        // wait for the scheduler to start, or at least run for 10 seconds before failing so
+        // that docker-compose's restart policy will restart the container.
+        let start_time = Instant::now().elapsed().as_secs();
+        let mut x = None;
+        while x.is_none()
+            && Instant::now().elapsed().as_secs() - start_time < connect_timeout
+        {
+            match create_grpc_client_connection(scheduler_url.clone())
+                .await
+                .context("Could not connect to scheduler")
+            {
+                Ok(conn) => {
+                    info!("Connected to scheduler at {}", scheduler_url);
+                    x = Some(conn);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to connect to scheduler at {} ({}); retrying ...",
+                        scheduler_url, e
+                    );
+                    std::thread::sleep(time::Duration::from_millis(500));
+                }
+            }
+        }
+        match x {
+            Some(conn) => Ok(conn),
+            _ => Err(BallistaError::General(format!(
+                "Timed out attempting to connect to scheduler at {scheduler_url}"
+            ))
+            .into()),
+        }
+    }?;
+    Ok(SchedulerGrpcClient::new(connection))
 }
 
 // Arrow flight service

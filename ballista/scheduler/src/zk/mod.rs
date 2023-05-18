@@ -93,7 +93,7 @@ impl SchedulerZkLeaderService {
         let rand = rand::random::<f32>();
         let wait_time = (zk_session_timeout.as_secs() as f32 * (1.0 + rand)) as u64;
         let wait_time = Duration::from_secs(wait_time);
-        let rt = tokio::runtime::Builder::new_current_thread()
+        let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
 
