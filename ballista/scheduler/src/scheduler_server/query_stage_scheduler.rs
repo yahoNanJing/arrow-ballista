@@ -195,7 +195,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 self.metrics_collector
                     .record_failed(&job_id, queued_at, failed_at);
 
-                error!("Job {} running failed", job_id);
+                error!("Job {} running failed due to {}", job_id, fail_message);
                 match self
                     .state
                     .task_manager
