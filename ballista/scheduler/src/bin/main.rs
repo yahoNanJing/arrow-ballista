@@ -28,7 +28,9 @@ use crate::config::{Config, ResultExt};
 use ballista_core::config::LogRotationPolicy;
 use ballista_scheduler::cluster::BallistaCluster;
 use ballista_scheduler::config::{ClusterStorageConfig, SchedulerConfig};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 #[macro_use]
 extern crate configure_me;
@@ -81,13 +83,28 @@ async fn main() -> Result<()> {
                 tracing_appender::rolling::never(log_dir, &log_file_name_prefix)
             }
         };
-        tracing_subscriber::fmt()
+        // log and fmt layer
+        let log_fmt_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_thread_names(print_thread_info)
             .with_thread_ids(print_thread_info)
             .with_writer(log_file)
-            .with_env_filter(log_filter)
+            .with_filter(log_filter);
+
+        #[cfg(feature = "scheduler-profile")]
+        tracing_subscriber::registry()
+            .with(log_fmt_layer)
+            // if enable the scheduler profile, add the tokio console layer to the subscriber
+            .with(
+                console_subscriber::ConsoleLayer::builder()
+                    .filter_env_var("tokio=trace,runtime=trace")
+                    .spawn(),
+            )
             .init();
+
+        #[cfg(not(feature = "scheduler-profile"))]
+        tracing_subscriber::registry().with(log_fmt_layer).init();
+
         if opt.log_clean_up_interval_seconds > 0 {
             ballista_core::utils::clean_up_log_loop(
                 log_dir.to_string(),
@@ -96,14 +113,27 @@ async fn main() -> Result<()> {
             );
         }
     } else {
-        // Console layer
-        tracing_subscriber::fmt()
+        // std io
+        let log_fmt_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_thread_names(print_thread_info)
             .with_thread_ids(print_thread_info)
             .with_writer(io::stdout)
-            .with_env_filter(log_filter)
+            .with_filter(log_filter);
+
+        #[cfg(feature = "scheduler-profile")]
+        tracing_subscriber::registry()
+            .with(log_fmt_layer)
+            // if enable the scheduler profile, add the tokio console layer to the subscriber
+            .with(
+                console_subscriber::ConsoleLayer::builder()
+                    .filter_env_var("tokio=trace,runtime=trace")
+                    .spawn(),
+            )
             .init();
+
+        #[cfg(not(feature = "scheduler-profile"))]
+        tracing_subscriber::registry().with(log_fmt_layer).init();
     }
 
     let addr = format!("{}:{}", opt.bind_host, opt.bind_port);
