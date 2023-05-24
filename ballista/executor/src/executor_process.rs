@@ -34,12 +34,14 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::{fs, time};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, Layer};
 use uuid::Uuid;
 
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion_proto::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 use tonic::transport::Channel;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use ballista_core::cache_layer::{
     medium::local_disk::LocalDiskMedium, policy::file::FileCacheLayer, CacheLayer,
@@ -128,13 +130,27 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
                 tracing_appender::rolling::never(log_dir, &opt.log_file_name_prefix)
             }
         };
-        tracing_subscriber::fmt()
+        let log_fmt_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_thread_names(opt.print_thread_info)
             .with_thread_ids(opt.print_thread_info)
             .with_writer(log_file)
-            .with_env_filter(log_filter)
+            .with_filter(log_filter);
+
+        #[cfg(feature = "executor-profile")]
+        tracing_subscriber::registry()
+            .with(log_fmt_layer)
+            // if enable the scheduler profile, add the tokio console layer to the subscriber
+            .with(
+                console_subscriber::ConsoleLayer::builder()
+                    .filter_env_var("tokio=trace,runtime=trace")
+                    .spawn(),
+            )
             .init();
+
+        #[cfg(not(feature = "executor-profile"))]
+        tracing_subscriber::registry().with(log_fmt_layer).init();
+
         if opt.log_clean_up_interval_seconds > 0 {
             ballista_core::utils::clean_up_log_loop(
                 log_dir.to_string(),
@@ -144,13 +160,26 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         }
     } else {
         // Console layer
-        tracing_subscriber::fmt()
+        let log_fmt_layer = tracing_subscriber::fmt::layer()
             .with_ansi(true)
             .with_thread_names(opt.print_thread_info)
             .with_thread_ids(opt.print_thread_info)
             .with_writer(io::stdout)
-            .with_env_filter(log_filter)
+            .with_filter(log_filter);
+
+        #[cfg(feature = "executor-profile")]
+        tracing_subscriber::registry()
+            .with(log_fmt_layer)
+            // if enable the scheduler profile, add the tokio console layer to the subscriber
+            .with(
+                console_subscriber::ConsoleLayer::builder()
+                    .filter_env_var("tokio=trace,runtime=trace")
+                    .spawn(),
+            )
             .init();
+
+        #[cfg(not(feature = "executor-profile"))]
+        tracing_subscriber::registry().with(log_fmt_layer).init();
     }
 
     let addr = format!("{}:{}", opt.bind_host, opt.port);
