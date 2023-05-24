@@ -444,17 +444,7 @@ impl JobState for InMemoryJobState {
     }
 
     async fn remove_job(&self, job_id: &str) -> Result<()> {
-        if let Some((_, (status, graph))) = self.completed_jobs.remove(job_id) {
-            info!("Job {} with status {:?} will be removed", job_id, status);
-            if let Some(graph) = graph {
-                let session_id = graph.session_id();
-                if self.sessions.remove(session_id).is_none() {
-                    warn!("Tried to delete non-existent session {session_id} from state");
-                }
-            } else {
-                warn!("The ExecutionGraph for {} does not exist in state", job_id);
-            }
-        } else {
+        if self.completed_jobs.remove(job_id).is_none() {
             warn!("Tried to delete non-existent job {job_id} from state");
         }
         Ok(())
