@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
             // if enable the scheduler profile, add the tokio console layer to the subscriber
             .with(
                 console_subscriber::ConsoleLayer::builder()
+                    .with_default_env()
                     .filter_env_var("tokio=trace,runtime=trace")
                     .spawn(),
             )
@@ -127,6 +128,7 @@ async fn main() -> Result<()> {
             // if enable the scheduler profile, add the tokio console layer to the subscriber
             .with(
                 console_subscriber::ConsoleLayer::builder()
+                    .with_default_env()
                     .filter_env_var("tokio=trace,runtime=trace")
                     .spawn(),
             )
