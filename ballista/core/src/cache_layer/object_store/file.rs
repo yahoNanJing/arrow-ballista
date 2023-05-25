@@ -30,7 +30,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-use tokio::runtime::Runtime;
 
 #[derive(Debug)]
 pub struct FileCacheObjectStore<M>
@@ -118,8 +117,7 @@ where
             let key = location.clone();
             let extra = self.inner.clone();
             tokio::task::spawn_blocking(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async move {
+                tokio::runtime::Handle::current().block_on(async move {
                     info!("Going to cache data for {}", key);
                     cache_layer.cache().get(key.clone(), extra).await;
                     info!("Data for {} has been cached", key);
@@ -151,8 +149,7 @@ where
             let key = location.clone();
             let extra = self.inner.clone();
             tokio::task::spawn_blocking(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async move {
+                tokio::runtime::Handle::current().block_on(async move {
                     info!("Going to cache data for {}", key);
                     cache_layer.cache().get(key.clone(), extra).await;
                     info!("Data for {} has been cached", key);
