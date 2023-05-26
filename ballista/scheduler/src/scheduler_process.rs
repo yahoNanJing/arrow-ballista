@@ -121,8 +121,10 @@ pub async fn start_server(
 
     Server::bind(&addr)
         .serve(make_service_fn(move |request: &AddrStream| {
+            // Enlarge the decode size to be 64MB
             let scheduler_grpc_server =
-                SchedulerGrpcServer::new(scheduler_server.clone());
+                SchedulerGrpcServer::new(scheduler_server.clone())
+                    .max_decoding_message_size(67108864);
 
             let keda_scaler = ExternalScalerServer::new(scheduler_server.clone());
 

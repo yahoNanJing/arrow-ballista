@@ -137,7 +137,9 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
             "Ballista v{} Rust Executor Grpc Server listening on {:?}",
             BALLISTA_VERSION, addr
         );
-        let server = ExecutorGrpcServer::new(executor_server.clone());
+        // Enlarge the decode size to be 64MB
+        let server = ExecutorGrpcServer::new(executor_server.clone())
+            .max_decoding_message_size(67108864);
         let mut grpc_shutdown = shutdown_noti.subscribe_for_shutdown();
         tokio::spawn(async move {
             let shutdown_signal = grpc_shutdown.recv();
