@@ -9,9 +9,10 @@ use log::{error, info, warn};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
+use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
-use tokio::time::sleep;
 use zookeeper::{WatchedEvent, WatchedEventType, Watcher, ZkState, ZooKeeper};
 
 #[tonic::async_trait]
@@ -182,9 +183,10 @@ impl ExecutorZkService {
         self.leader_scheduler_changed.load(Ordering::SeqCst)
     }
 
-    async fn change_scheduler(
+    fn change_scheduler(
         &mut self,
         new_scheduler_url: String,
+        rt: &Runtime,
     ) -> Result<(), BallistaError> {
         let new_scheduler_url = Some(new_scheduler_url);
 
@@ -208,14 +210,14 @@ impl ExecutorZkService {
                 ))
             }
             Some(ref mut inner_listener) => {
-                inner_listener
-                    .change_scheduler(self.leader_scheduler_url.as_ref().unwrap().clone())
-                    .await
+                rt.block_on(inner_listener.change_scheduler(
+                    self.leader_scheduler_url.as_ref().unwrap().clone(),
+                ))
             }
         }
     }
 
-    async fn try_to_change_new_scheduler(&mut self) {
+    fn try_to_change_new_scheduler(&mut self, rt: &Runtime) {
         if self.host_path_exist() {
             let scheduler_changed_capture = self.leader_scheduler_changed.clone();
             let watcher = SchedulerChangeWatcher::new(scheduler_changed_capture);
@@ -229,9 +231,7 @@ impl ExecutorZkService {
                     } else {
                         match String::from_utf8(data.clone()) {
                             Ok(new_scheduler_url) => {
-                                match self
-                                    .change_scheduler(new_scheduler_url.clone())
-                                    .await
+                                match self.change_scheduler(new_scheduler_url.clone(), rt)
                                 {
                                     Ok(_) => {
                                         info!(
@@ -280,7 +280,7 @@ impl ExecutorZkService {
         }
     }
 
-    async fn create_zk_connection(&self) -> ZooKeeper {
+    fn create_zk_connection(&self) -> ZooKeeper {
         loop {
             match ZooKeeper::connect(
                 &self.zk_address,
@@ -310,12 +310,12 @@ impl ExecutorZkService {
                 }
             }
             warn!("Wait and retry to create the zk connection");
-            self.sleep_wait().await;
+            self.sleep_wait();
         }
     }
 
-    async fn sleep_wait(&self) {
-        sleep(self.wait_time).await;
+    fn sleep_wait(&self) {
+        thread::sleep(self.wait_time);
     }
 
     fn update_connection_state(&mut self, zk: ZooKeeper) {
@@ -332,24 +332,25 @@ impl ExecutorZkService {
         self.listener = Some(listener);
     }
 
-    pub async fn start_watch_scheduler(
+    pub fn start_watch_scheduler(
         &mut self,
         mut zk_shutdown: Shutdown,
         zk_complete: mpsc::Sender<()>,
+        rt: Runtime,
     ) {
         info!("The executor start watching the change of scheduler");
-        while !zk_shutdown.is_shutdown() {
+        loop {
             let is_connected = self.is_zk_connected();
             let scheduler_changed = self.is_leader_scheduler_changed();
             if is_connected {
                 if scheduler_changed {
-                    self.try_to_change_new_scheduler().await;
+                    self.try_to_change_new_scheduler(&rt);
                     info!("After change scheduler: {:?}", self);
                 }
             } else {
                 // create the zk connection
                 info!("The executor does not connect the zk, and create the connection");
-                let zk = self.create_zk_connection().await;
+                let zk = self.create_zk_connection();
                 self.update_connection_state(zk);
 
                 // add listener to the zk connection and monitor the connection of the network
@@ -372,14 +373,13 @@ impl ExecutorZkService {
                 });
                 continue;
             }
-            // timeout or receive stop signal
-            tokio::select! {
-                _ = sleep(self.wait_time) => {},
-                _ = zk_shutdown.recv() => {
-                    info!("Stop zk watcher scheduler service");
-                        drop(zk_complete);
-                        return;
-                }
+            self.sleep_wait();
+
+            if zk_shutdown.try_recv() {
+                // got shut down message, return the loop
+                info!("Stop the scheduler leader watcher service");
+                drop(zk_complete);
+                return;
             }
         }
     }

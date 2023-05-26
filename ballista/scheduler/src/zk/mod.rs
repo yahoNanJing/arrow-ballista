@@ -1,5 +1,4 @@
 use crate::scheduler_server::SchedulerServer;
-use anyhow::Result;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use log::{info, warn};
@@ -61,7 +60,6 @@ pub struct SchedulerZkLeaderService {
     zk_address: String,
     listener: Box<dyn SchedulerStateChangeListener>,
     wait_time: Duration,
-    rt: Runtime,
 }
 
 impl Debug for SchedulerZkLeaderService {
@@ -89,13 +87,10 @@ impl SchedulerZkLeaderService {
         zk_session_timeout: Duration,
         zk_address: String,
         listener: Box<dyn SchedulerStateChangeListener>,
-    ) -> Result<Self> {
+    ) -> Self {
         let rand = rand::random::<f32>();
         let wait_time = (zk_session_timeout.as_secs() as f32 * (1.0 + rand)) as u64;
         let wait_time = Duration::from_secs(wait_time);
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?;
 
         let service = SchedulerZkLeaderService {
             leader_host_path,
@@ -110,9 +105,8 @@ impl SchedulerZkLeaderService {
             zk_address,
             listener,
             wait_time,
-            rt,
         };
-        Ok(service)
+        service
     }
 
     fn sleep_wait(&self) {
@@ -148,10 +142,10 @@ impl SchedulerZkLeaderService {
         Ok(())
     }
 
-    fn change_to_leader(&self) {
+    fn change_to_leader(&self, rt: &Runtime) {
         info!("Begin to change scheduler to leader");
         // change state of the listener
-        self.rt.block_on(self.listener.change_to_leader());
+        rt.block_on(self.listener.change_to_leader());
 
         let zk = self.zk_client.as_ref().unwrap();
         let data = self.current_scheduler_address.as_bytes().to_vec();
@@ -203,10 +197,10 @@ impl SchedulerZkLeaderService {
         self.is_leader.store(true, Ordering::SeqCst);
     }
 
-    fn change_to_follower(&self) {
+    fn change_to_follower(&self, rt: &Runtime) {
         info!("Begin to change scheduler to follower");
         // change state of the listener
-        self.rt.block_on(self.listener.change_to_follower());
+        rt.block_on(self.listener.change_to_follower());
         // from `true` to `false`
         info!(
             "The scheduler {:?} changed from leader to follower with id {:?}",
@@ -323,13 +317,13 @@ impl SchedulerZkLeaderService {
         self.id = Some(id);
     }
 
-    pub fn start_election(&mut self) {
+    pub fn start_election(&mut self, rt: Runtime) {
         info!(
             "The scheduler {} start the leader election",
             self.current_scheduler_address
         );
         // change to follower first
-        self.change_to_follower();
+        self.change_to_follower(&rt);
 
         loop {
             let is_connected = self.is_zk_connected();
@@ -343,11 +337,11 @@ impl SchedulerZkLeaderService {
                 match (self.is_leader(), leader_latch.has_leadership()) {
                     (true, false) => {
                         // leader -> follower
-                        self.change_to_follower();
+                        self.change_to_follower(&rt);
                     }
                     (false, true) => {
                         // follower -> leader
-                        self.change_to_leader();
+                        self.change_to_leader(&rt);
                     }
                     _ => {}
                 }

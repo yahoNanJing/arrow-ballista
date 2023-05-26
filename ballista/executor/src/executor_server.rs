@@ -24,6 +24,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
 
@@ -110,19 +111,34 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
             false
         }
         Some(mut zk_service) => {
-            info!("Start up with zk service");
             let listener = Box::new(executor_server.clone());
             zk_service.with_executor_change_listener(listener);
             let zk_watch_service_shutdown = shutdown_noti.subscribe_for_shutdown();
             let zk_watch_service_complete = shutdown_noti.shutdown_complete_tx.clone();
-            tokio::spawn(async move {
-                zk_service
-                    .start_watch_scheduler(
+
+            thread::Builder::new()
+                .name("zk-scheduler-leader-watcher".to_string())
+                .spawn(move || {
+                    info!("Start up with zk service");
+                    let rt = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(1)
+                        .enable_all()
+                        .build()
+                        .unwrap();
+
+                    zk_service.start_watch_scheduler(
                         zk_watch_service_shutdown,
                         zk_watch_service_complete,
-                    )
-                    .await;
-            });
+                        rt,
+                    );
+                })
+                .map_err(|e| {
+                    BallistaError::Internal(format!(
+                        "Can't create scheduler leader watcher thread: {:?}",
+                        e
+                    ))
+                })?;
+
             true
         }
     };

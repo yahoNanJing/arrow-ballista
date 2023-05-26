@@ -100,13 +100,18 @@ pub async fn start_server(
             zk_session_timeout,
             zk_address,
             listener,
-        )?;
+        );
 
         thread::Builder::new()
             .name("zk-leader-election".to_string())
             .spawn(move || {
                 info!("Starting zk leader election");
-                zk_leader_election.start_election();
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                zk_leader_election.start_election(rt);
             })?;
     } else {
         warn!(
