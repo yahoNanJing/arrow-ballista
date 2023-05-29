@@ -531,7 +531,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
     }
 
     pub(crate) fn clear_executor_tasks(&self) {
+        // abort all tasks and clear task
         self.executor.clear_all_tasks();
+        // clear work dir data
+        self.executor.clear_work_dir_data();
     }
 }
 

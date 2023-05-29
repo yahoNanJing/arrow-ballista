@@ -67,7 +67,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorStateChan
                         return Err(BallistaError::TonicError(grpc_error));
                     }
                 };
-                // clear executor tasks
+                // clear executor tasks and clean up data in the shuffle dir with block api
                 self.clear_executor_tasks();
                 // create the new connection
                 let mut new_scheduler_client = SchedulerGrpcClient::new(new_connection);

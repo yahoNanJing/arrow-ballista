@@ -31,9 +31,10 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::udf::ScalarUDF;
 use futures::future::AbortHandle;
-use log::{debug, info};
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -174,7 +175,7 @@ impl Executor {
         self.abort_handles.len()
     }
 
-    pub fn clear_all_tasks(&self) {
+    pub(crate) fn clear_all_tasks(&self) {
         info!(
             "Clear all executor tasks, the number of tasks: {:?}",
             self.abort_handles.len()
@@ -185,6 +186,44 @@ impl Executor {
             task.value().abort();
         });
         self.abort_handles.clear()
+    }
+
+    pub(crate) fn clear_work_dir_data(&self) {
+        info!("Clear all data in the work dir: {:?}", self.work_dir);
+        let work_dir = PathBuf::from(&self.work_dir);
+        let mut count_success = 0;
+        let mut count_fail = 0;
+        match std::fs::read_dir(work_dir) {
+            Ok(child_dirs) => {
+                for child_dir in child_dirs {
+                    match child_dir {
+                        Ok(child_entity) => {
+                            if let Err(remove_dir_error) =
+                                std::fs::remove_dir_all(child_entity.path())
+                            {
+                                warn!("Fail to clear data in the child dir path: {:?}, with {:?}",
+                                    child_entity.path(), remove_dir_error);
+                                count_fail += 1;
+                            } else {
+                                count_success += 1;
+                            }
+                        }
+                        Err(get_dir_error) => {
+                            warn!("Fail to get data path in the work dir path: {:?}, with {:?}",
+                                self.work_dir, get_dir_error);
+                        }
+                    }
+                }
+            }
+            Err(read_dir_error) => {
+                warn!(
+                    "Fail to read child dir in the work dir {:?}, with {:?}",
+                    self.work_dir, read_dir_error
+                );
+            }
+        }
+        info!("Clear the work dir: {:?}, with {:?} dir deleted successfully and {:?} dir deleted unsuccessfully",
+            self.work_dir, count_success, count_fail);
     }
 }
 
