@@ -331,7 +331,8 @@ impl InMemoryJobState {
 impl JobState for InMemoryJobState {
     async fn submit_job(&self, job_id: String, graph: &ExecutionGraph) -> Result<()> {
         if self.queued_jobs.get(&job_id).is_some() {
-            self.running_jobs.insert(job_id.clone(), graph.status());
+            self.running_jobs
+                .insert(job_id.clone(), graph.status().clone());
             self.queued_jobs.remove(&job_id);
 
             self.job_event_sender.send(&JobStateEvent::JobAcquired {
@@ -384,7 +385,7 @@ impl JobState for InMemoryJobState {
     }
 
     async fn save_job(&self, job_id: &str, graph: &ExecutionGraph) -> Result<()> {
-        let status = graph.status();
+        let status = graph.status().clone();
 
         debug!("saving state for job {job_id} with status {:?}", status);
 
@@ -397,7 +398,7 @@ impl JobState for InMemoryJobState {
                 .insert(job_id.to_string(), (status, Some(graph.clone())));
             self.running_jobs.remove(job_id);
         } else if let Some(old_status) =
-            self.running_jobs.insert(job_id.to_string(), graph.status())
+            self.running_jobs.insert(job_id.to_string(), status)
         {
             self.job_event_sender.send(&JobStateEvent::JobUpdated {
                 job_id: job_id.to_string(),

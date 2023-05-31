@@ -33,7 +33,9 @@ use ballista_core::config::BallistaConfig;
 use ballista_core::consistent_hash;
 use ballista_core::consistent_hash::ConsistentHash;
 use ballista_core::error::{BallistaError, Result};
-use ballista_core::serde::protobuf::{AvailableTaskSlots, ExecutorHeartbeat, JobStatus};
+use ballista_core::serde::protobuf::{
+    job_status, AvailableTaskSlots, ExecutorHeartbeat, JobStatus,
+};
 use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata, PartitionId};
 use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::default_session_builder;
@@ -46,7 +48,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use futures::Stream;
-use log::{info, warn};
+use log::{debug, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
@@ -393,6 +395,13 @@ pub(crate) async fn bind_task_bias(
     let mut slot = &mut slots[idx_slot];
     for pairs in active_jobs.iter() {
         let (job_id, job_info) = pairs.pair();
+        if !matches!(job_info.status, Some(job_status::Status::Running(_))) {
+            debug!(
+                "Job {} is not in running status and will be skipped",
+                job_id
+            );
+            continue;
+        }
         let mut graph = job_info.execution_graph.write().await;
         let session_id = graph.session_id().to_string();
         let mut black_list = vec![];
@@ -474,6 +483,13 @@ pub(crate) async fn bind_task_round_robin(
     let mut idx_slot = 0usize;
     for pairs in active_jobs.iter() {
         let (job_id, job_info) = pairs.pair();
+        if !matches!(job_info.status, Some(job_status::Status::Running(_))) {
+            debug!(
+                "Job {} is not in running status and will be skipped",
+                job_id
+            );
+            continue;
+        }
         let mut graph = job_info.execution_graph.write().await;
         let session_id = graph.session_id().to_string();
         let mut black_list = vec![];
@@ -571,6 +587,13 @@ pub(crate) async fn bind_task_consistent_hash(
     let mut schedulable_tasks: Vec<BoundTask> = vec![];
     for pairs in active_jobs.iter() {
         let (job_id, job_info) = pairs.pair();
+        if !matches!(job_info.status, Some(job_status::Status::Running(_))) {
+            debug!(
+                "Job {} is not in running status and will be skipped",
+                job_id
+            );
+            continue;
+        }
         let mut graph = job_info.execution_graph.write().await;
         let session_id = graph.session_id().to_string();
         let mut black_list = vec![];

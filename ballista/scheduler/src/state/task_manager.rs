@@ -27,7 +27,7 @@ use ballista_core::error::Result;
 
 use crate::cluster::JobState;
 use ballista_core::serde::protobuf::{
-    JobStatus, MultiTaskDefinition, TaskDefinition, TaskId, TaskStatus,
+    job_status, JobStatus, MultiTaskDefinition, TaskDefinition, TaskId, TaskStatus,
 };
 use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::BallistaCodec;
@@ -122,14 +122,18 @@ pub struct TaskManager<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 pub struct JobInfoCache {
     // Cache for active execution graphs curated by this scheduler
     pub execution_graph: Arc<RwLock<ExecutionGraph>>,
+    // Cache for job status
+    pub status: Option<job_status::Status>,
     // Cache for encoded execution stage plan to avoid duplicated encoding for multiple tasks
     encoded_stage_plans: HashMap<usize, Vec<u8>>,
 }
 
 impl JobInfoCache {
     fn new(graph: ExecutionGraph) -> Self {
+        let status = graph.status().status.clone();
         Self {
             execution_graph: Arc::new(RwLock::new(graph)),
+            status,
             encoded_stage_plans: HashMap::new(),
         }
     }
@@ -241,7 +245,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         if let Some(graph) = self.get_active_execution_graph(job_id) {
             let guard = graph.read().await;
 
-            Ok(Some(guard.status()))
+            Ok(Some(guard.status().clone()))
         } else {
             self.state.get_job_status(job_id).await
         }
@@ -658,7 +662,7 @@ impl From<&ExecutionGraph> for JobOverview {
         Self {
             job_id: value.job_id().to_string(),
             job_name: value.job_name().to_string(),
-            status: value.status(),
+            status: value.status().clone(),
             start_time: value.start_time(),
             end_time: value.end_time(),
             num_stages: value.stage_count(),

@@ -199,8 +199,8 @@ impl ExecutionGraph {
         self.session_id.as_str()
     }
 
-    pub fn status(&self) -> JobStatus {
-        self.status.clone()
+    pub fn status(&self) -> &JobStatus {
+        &self.status
     }
 
     pub fn start_time(&self) -> u64 {
