@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use ballista_core::error::BallistaError;
 use ballista_core::error::Result;
@@ -117,29 +117,25 @@ impl ExecutorManager {
         }
 
         let executor_manager = self.clone();
-        tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                for (executor_id, infos) in tasks_to_cancel {
-                    if let Ok(mut client) =
-                        executor_manager.get_client(&executor_id).await
+        tokio::spawn(async move {
+            for (executor_id, infos) in tasks_to_cancel {
+                if let Ok(mut client) = executor_manager.get_client(&executor_id).await {
+                    if let Err(e) = client
+                        .cancel_tasks(CancelTasksParams { task_infos: infos })
+                        .await
                     {
-                        if let Err(e) = client
-                            .cancel_tasks(CancelTasksParams { task_infos: infos })
-                            .await
-                        {
-                            error!(
-                                "Fail to cancel tasks for executor ID {} due to {:?}",
-                                executor_id, e
-                            );
-                        }
-                    } else {
                         error!(
-                            "Failed to get client for executor ID {} to cancel tasks",
-                            executor_id
-                        )
+                            "Fail to cancel tasks for executor ID {} due to {:?}",
+                            executor_id, e
+                        );
                     }
+                } else {
+                    error!(
+                        "Failed to get client for executor ID {} to cancel tasks",
+                        executor_id
+                    )
                 }
-            });
+            }
         });
 
         Ok(())
@@ -159,34 +155,18 @@ impl ExecutorManager {
             return;
         }
 
-        let deadline_epoch_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs()
-            + clean_up_interval;
         let executor_manager = self.clone();
-        tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                let now_epoch_ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs();
-                if deadline_epoch_ts > now_epoch_ts {
-                    let sleep_interval = deadline_epoch_ts - now_epoch_ts;
-                    tokio::time::sleep(Duration::from_secs(sleep_interval)).await;
-                }
-                executor_manager.clean_up_job_data_inner(job_id).await;
-            });
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(clean_up_interval)).await;
+            executor_manager.clean_up_job_data_inner(job_id).await;
         });
     }
 
     /// Send rpc to Executors to clean up the job data in a spawn thread
     pub fn clean_up_job_data(&self, job_id: String) {
         let executor_manager = self.clone();
-        tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                executor_manager.clean_up_job_data_inner(job_id).await;
-            });
+        tokio::spawn(async move {
+            executor_manager.clean_up_job_data_inner(job_id).await;
         });
     }
 
@@ -196,17 +176,19 @@ impl ExecutorManager {
         for executor in alive_executors {
             let job_id_clone = job_id.to_owned();
             if let Ok(mut client) = self.get_client(&executor).await {
-                if let Err(err) = client
-                    .remove_job_data(RemoveJobDataParams {
-                        job_id: job_id_clone,
-                    })
-                    .await
-                {
-                    warn!(
-                        "Failed to call remove_job_data on Executor {} due to {:?}",
-                        executor, err
-                    )
-                }
+                tokio::spawn(async move {
+                    if let Err(err) = client
+                        .remove_job_data(RemoveJobDataParams {
+                            job_id: job_id_clone,
+                        })
+                        .await
+                    {
+                        warn!(
+                            "Failed to call remove_job_data on Executor {} due to {:?}",
+                            executor, err
+                        )
+                    }
+                });
             } else {
                 warn!("Failed to get client for Executor {}", executor)
             }
@@ -353,19 +335,20 @@ impl ExecutorManager {
         let executor_id = executor_id.to_string();
         match self.get_client(&executor_id).await {
             Ok(mut client) => {
-                tokio::task::spawn_blocking(move || {
-                    tokio::runtime::Handle::current().block_on(async move {
-                        if let Err(error) = client
-                            .stop_executor(StopExecutorParams {
-                                executor_id: executor_id.to_string(),
-                                reason: stop_reason,
-                                force: true,
-                            })
-                            .await
-                        {
+                tokio::task::spawn(async move {
+                    match client
+                        .stop_executor(StopExecutorParams {
+                            executor_id: executor_id.to_string(),
+                            reason: stop_reason,
+                            force: true,
+                        })
+                        .await
+                    {
+                        Err(error) => {
                             warn!("Failed to send stop_executor rpc due to, {}", error);
                         }
-                    });
+                        Ok(_value) => {}
+                    }
                 });
             }
             Err(_) => {

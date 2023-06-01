@@ -621,26 +621,13 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
             return;
         }
 
-        let deadline_epoch_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs()
-            + clean_up_interval;
         let state = self.state.clone();
-        tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(async move {
-                let now_epoch_ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs();
-                if deadline_epoch_ts > now_epoch_ts {
-                    let sleep_interval = deadline_epoch_ts - now_epoch_ts;
-                    tokio::time::sleep(Duration::from_secs(sleep_interval)).await;
-                }
-                if let Err(err) = state.remove_job(&job_id).await {
-                    error!("Failed to delete job {job_id}: {err:?}");
-                }
-            });
+        tokio::spawn(async move {
+            let job_id = job_id;
+            tokio::time::sleep(Duration::from_secs(clean_up_interval)).await;
+            if let Err(err) = state.remove_job(&job_id).await {
+                error!("Failed to delete job {job_id}: {err:?}");
+            }
         });
     }
 
