@@ -220,6 +220,9 @@ async fn register_executor(
     }
 }
 
+pub(crate) type MultiSchedulerOfZk =
+    Arc<RwLock<Option<(String, SchedulerGrpcClient<Channel>)>>>;
+
 #[derive(Clone)]
 pub struct ExecutorServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
     _start_time: u128,
@@ -228,8 +231,7 @@ pub struct ExecutorServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPl
     codec: BallistaCodec<T, U>,
     scheduler_to_register: Option<SchedulerGrpcClient<Channel>>,
     schedulers: SchedulerClients,
-    pub(crate) scheduler_from_zk:
-        Arc<RwLock<Option<(String, SchedulerGrpcClient<Channel>)>>>,
+    pub(crate) scheduler_from_zk: MultiSchedulerOfZk,
 }
 
 #[derive(Clone)]

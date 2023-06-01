@@ -32,17 +32,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorStateChan
         scheduler_url: String,
     ) -> Result<(), BallistaError> {
         let mut write = self.scheduler_from_zk.write().await;
-
-        let new_scheduler_url = if write.is_none() {
-            // there is no previous scheduler
-            let scheduler_url = format!("http://{}", scheduler_url.clone());
-            Some(scheduler_url)
-        } else {
-            // need to create a new scheduler client
-            let scheduler_url = format!("http://{}", scheduler_url.clone());
-            Some(scheduler_url)
-        };
-
+        let new_scheduler_url = Some(format!("http://{}", scheduler_url.clone()));
         match new_scheduler_url {
             None => {
                 error!("Can't find the new scheduler url");
@@ -109,12 +99,9 @@ impl SchedulerChangeWatcher {
 impl Watcher for SchedulerChangeWatcher {
     fn handle(&self, event: WatchedEvent) {
         info!("Watch event for the executor: {:?}", event);
-        match event.event_type {
-            WatchedEventType::NodeDataChanged => {
-                info!("Get data changed event for the executor");
-                self.scheduler_changed.store(true, Ordering::SeqCst);
-            }
-            _ => {}
+        if let WatchedEventType::NodeDataChanged = event.event_type {
+            info!("Get data changed event for the executor");
+            self.scheduler_changed.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -226,7 +213,7 @@ impl ExecutorZkService {
             self.leader_scheduler_changed.store(false, Ordering::SeqCst);
             match zk.get_data_w(self.leader_host_path.as_str(), watcher) {
                 Ok((data, _)) => {
-                    if data.len() == 0 {
+                    if data.is_empty() {
                         warn!("The scheduler host path {:?} does not contain any data, and will not change the scheduler", self.leader_host_path);
                     } else {
                         match String::from_utf8(data.clone()) {
@@ -274,17 +261,17 @@ impl ExecutorZkService {
 
     fn host_path_exist(&self) -> bool {
         let zk = self.zk_client.as_ref().unwrap();
-        match zk.exists(self.leader_host_path.as_str(), false) {
-            Ok(Some(_)) => true,
-            _ => false,
-        }
+        matches!(
+            zk.exists(self.leader_host_path.as_str(), false),
+            Ok(Some(_))
+        )
     }
 
     fn create_zk_connection(&self) -> ZooKeeper {
         loop {
             match ZooKeeper::connect(
                 &self.zk_address,
-                self.zk_session_timeout.clone(),
+                self.zk_session_timeout,
                 DefaultExecutorZkWatcher,
             ) {
                 Ok(zk) => {

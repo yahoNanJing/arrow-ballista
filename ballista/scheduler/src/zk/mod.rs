@@ -92,7 +92,7 @@ impl SchedulerZkLeaderService {
         let wait_time = (zk_session_timeout.as_secs() as f32 * (1.0 + rand)) as u64;
         let wait_time = Duration::from_secs(wait_time);
 
-        let service = SchedulerZkLeaderService {
+        SchedulerZkLeaderService {
             leader_host_path,
             leader_election_path,
             current_scheduler_address,
@@ -105,8 +105,7 @@ impl SchedulerZkLeaderService {
             zk_address,
             listener,
             wait_time,
-        };
-        service
+        }
     }
 
     fn sleep_wait(&self) {
@@ -213,7 +212,7 @@ impl SchedulerZkLeaderService {
         loop {
             match ZooKeeper::connect(
                 &self.zk_address,
-                self.zk_session_timeout.clone(),
+                self.zk_session_timeout,
                 DefaultSchedulerZkWatcher,
             ) {
                 Ok(zk) => {
@@ -257,7 +256,7 @@ impl SchedulerZkLeaderService {
             id.clone(),
             self.leader_election_path.clone(),
         ));
-        return match leader_latch.start() {
+        match leader_latch.start() {
             Ok(_) => {
                 info!("The scheduler {:?} begin the new leader election successfully with new id {:?}, previous id {:?}", self.current_scheduler_address, id, self.id);
                 self.update_zk_connection(zk, leader_latch, id);
@@ -268,7 +267,7 @@ impl SchedulerZkLeaderService {
                 warn!("The scheduler {:?} failed to the new leader election with new id {:?}, previous id {:?}, and will retry", self.current_scheduler_address, id, self.id);
                 false
             }
-        };
+        }
     }
 
     fn connect_and_leader_election(&mut self) {

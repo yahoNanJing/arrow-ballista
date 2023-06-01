@@ -88,7 +88,7 @@ pub async fn start_server(
             config.zk_leader_host_path,
             config.zk_session_timeout
         );
-        let zk_session_timeout = Duration::from_secs(config.zk_session_timeout.clone());
+        let zk_session_timeout = Duration::from_secs(config.zk_session_timeout);
         let zk_address = config.zk_address.clone().unwrap();
         let leader_election_path = config.zk_leader_election_path.clone().unwrap();
         let leader_host_path = config.zk_leader_host_path.clone().unwrap();

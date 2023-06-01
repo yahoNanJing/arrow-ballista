@@ -144,7 +144,7 @@ mod tests {
         // Assert that cache is work.
         assert_eq!(length, 1);
 
-        let _res3 = SHUFFLE_READER_POOL
+        SHUFFLE_READER_POOL
             .invalidate_connection(Arc::from(ADDR))
             .await;
 

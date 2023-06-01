@@ -190,7 +190,7 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         .with_context(|| format!("Could not parse address: {addr}"))?;
 
     let scheduler_host = opt.scheduler_host.clone();
-    let scheduler_port = opt.scheduler_port.clone();
+    let scheduler_port = opt.scheduler_port;
     let scheduler_url = format!("http://{scheduler_host}:{scheduler_port}");
 
     let work_dir = opt.work_dir.clone().unwrap_or(

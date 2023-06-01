@@ -82,11 +82,9 @@ impl<E: Send + 'static + Debug> EventLoop<E> {
                         // TODO: if this scheduler is not the leader
                         if stopped.load(Ordering::SeqCst) {
                             warn!("The event loop was stopped, but receive an event, ignore this event {:?}", event);
-                        } else {
-                            if let Err(e) = action.on_receive(event, &tx_event, &mut rx_event).await {
+                        } else if let Err(e) = action.on_receive(event, &tx_event, &rx_event).await {
                                 error!("Fail to process event due to {}", e);
                                 action.on_error(e);
-                            }
                         }
                     },
                     else => {
