@@ -538,6 +538,37 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         // clear work dir data
         self.executor.clear_work_dir_data();
     }
+
+    /// If the [`job_id`] is illegal, return the related warning message
+    pub(crate) fn delete_job_dir(
+        &self,
+        job_id: String,
+    ) -> Result<Option<String>, Status> {
+        let work_dir = PathBuf::from(&self.executor.work_dir);
+        let mut path = work_dir.clone();
+        path.push(&job_id);
+
+        // Verify it's an existing directory
+        if !path.is_dir() {
+            return if !path.exists() {
+                Ok(None)
+            } else {
+                Ok(Some(format!("Path {path:?} is not for a directory!!!")))
+            };
+        }
+
+        if !is_subdirectory(path.as_path(), work_dir.as_path()) {
+            return Ok(Some(format!(
+                "Path {path:?} is not a subdirectory of {work_dir:?}!!!"
+            )));
+        }
+
+        info!("Remove data for job {:?}", job_id);
+
+        std::fs::remove_dir_all(&path)?;
+
+        Ok(None)
+    }
 }
 
 /// Heartbeater will run forever until a shutdown notification received.
@@ -845,34 +876,20 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorGrpc
         &self,
         request: Request<RemoveJobDataParams>,
     ) -> Result<Response<RemoveJobDataResult>, Status> {
-        let job_id = request.into_inner().job_id;
-
-        let work_dir = PathBuf::from(&self.executor.work_dir);
-        let mut path = work_dir.clone();
-        path.push(&job_id);
-
-        // Verify it's an existing directory
-        if !path.is_dir() {
-            return if !path.exists() {
-                Ok(Response::new(RemoveJobDataResult {}))
-            } else {
-                Err(Status::invalid_argument(format!(
-                    "Path {path:?} is not for a directory!!!"
-                )))
-            };
+        let mut warning_msgs = vec![];
+        for job_id in request.into_inner().job_ids {
+            if let Some(warning_msg) = self.delete_job_dir(job_id)? {
+                warning_msgs.push(warning_msg);
+            }
         }
-
-        if !is_subdirectory(path.as_path(), work_dir.as_path()) {
-            return Err(Status::invalid_argument(format!(
-                "Path {path:?} is not a subdirectory of {work_dir:?}!!!"
-            )));
+        if warning_msgs.is_empty() {
+            Ok(Response::new(RemoveJobDataResult {}))
+        } else {
+            Err(Status::invalid_argument(format!(
+                "Some error occurs due to: \n {:?}",
+                warning_msgs
+            )))
         }
-
-        info!("Remove data for job {:?}", job_id);
-
-        std::fs::remove_dir_all(&path)?;
-
-        Ok(Response::new(RemoveJobDataResult {}))
     }
 }
 

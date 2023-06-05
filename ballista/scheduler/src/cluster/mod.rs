@@ -342,6 +342,9 @@ pub trait JobState: Send + Sync {
     /// Delete a job from the global state
     async fn remove_job(&self, job_id: &str) -> Result<()>;
 
+    /// Delete a vector of jobs from the global state
+    async fn remove_jobs(&self, job_ids: &[String]) -> Result<()>;
+
     /// Attempt to acquire ownership of the given job. If the job is still in a running state
     /// and is successfully acquired by the caller, return the current `ExecutionGraph`,
     /// otherwise return `None`

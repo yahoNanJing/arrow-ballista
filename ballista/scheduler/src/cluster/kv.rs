@@ -637,6 +637,25 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         }
     }
 
+    async fn remove_jobs(&self, job_ids: &[String]) -> Result<()> {
+        let mut ops = vec![];
+        for job_id in job_ids {
+            if self.queued_jobs.remove(job_id).is_none() {
+                ops.push((Operation::Delete, Keyspace::JobStatus, job_id.to_string()));
+                ops.push((
+                    Operation::Delete,
+                    Keyspace::ExecutionGraph,
+                    job_id.to_string(),
+                ));
+            }
+        }
+        if !ops.is_empty() {
+            self.store.apply_txn(ops).await
+        } else {
+            Ok(())
+        }
+    }
+
     async fn try_acquire_job(&self, _job_id: &str) -> Result<Option<ExecutionGraph>> {
         Err(BallistaError::NotImplemented(
             "Work stealing is not currently implemented".to_string(),

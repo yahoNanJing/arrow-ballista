@@ -1156,8 +1156,8 @@ pub struct CancelTasksResult {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RemoveJobDataParams {
-    #[prost(string, tag = "1")]
-    pub job_id: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "1")]
+    pub job_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

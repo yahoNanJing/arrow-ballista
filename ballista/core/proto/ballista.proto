@@ -681,7 +681,7 @@ message CancelTasksResult {
 }
 
 message RemoveJobDataParams {
-  string job_id = 1;
+  repeated string job_ids = 1;
 }
 
 message RemoveJobDataResult {

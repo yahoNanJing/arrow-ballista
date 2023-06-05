@@ -42,7 +42,6 @@ use rand::{thread_rng, Rng};
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
@@ -614,21 +613,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
             .collect()
     }
 
-    /// Clean up a failed job in FailedJobs Keyspace by delayed clean_up_interval seconds
-    pub(crate) fn clean_up_job_delayed(&self, job_id: String, clean_up_interval: u64) {
-        if clean_up_interval == 0 {
-            info!("The interval is 0 and the clean up for the failed job state {} will not triggered", job_id);
-            return;
+    pub(crate) async fn remove_jobs(&self, job_ids: Vec<String>) {
+        if let Err(err) = self.state.remove_jobs(&job_ids).await {
+            error!("Failed to delete jobs {job_ids:?} due to: {err:?}");
         }
-
-        let state = self.state.clone();
-        tokio::spawn(async move {
-            let job_id = job_id;
-            tokio::time::sleep(Duration::from_secs(clean_up_interval)).await;
-            if let Err(err) = state.remove_job(&job_id).await {
-                error!("Failed to delete job {job_id}: {err:?}");
-            }
-        });
     }
 
     pub(crate) fn clean_up_task_manager(&self) {

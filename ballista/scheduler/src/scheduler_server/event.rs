@@ -133,3 +133,55 @@ impl Debug for QueryStageSchedulerEvent {
         }
     }
 }
+
+/// Events for cleaning up job shuffle data on executors
+#[derive(Clone)]
+pub enum JobDataCleanupEvent {
+    Immediate {
+        job_id: String,
+    },
+    Delayed {
+        job_id: String,
+        /// For checking whether the current time is larger than this. If yes, do the cleanup.
+        deadline: u64,
+    },
+}
+
+impl Debug for JobDataCleanupEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobDataCleanupEvent::Immediate { job_id } => {
+                write!(f, "JobDataCleanupEvent::Immediate({job_id}).")
+            }
+            JobDataCleanupEvent::Delayed { job_id, deadline } => {
+                write!(f, "JobDataCleanupEvent::Delayed({job_id}, {deadline}).")
+            }
+        }
+    }
+}
+
+/// Events for cleaning up job state on schedulers
+#[derive(Clone)]
+pub enum JobStateCleanupEvent {
+    Immediate {
+        job_id: String,
+    },
+    Delayed {
+        job_id: String,
+        /// For checking whether the current time is larger than this. If yes, do the cleanup.
+        deadline: u64,
+    },
+}
+
+impl Debug for JobStateCleanupEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JobStateCleanupEvent::Immediate { job_id } => {
+                write!(f, "JobStateCleanupEvent::Immediate({job_id}).")
+            }
+            JobStateCleanupEvent::Delayed { job_id, deadline } => {
+                write!(f, "JobStateCleanupEvent::Delayed({job_id}, {deadline}).")
+            }
+        }
+    }
+}

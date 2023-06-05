@@ -16,7 +16,7 @@
 // under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
@@ -26,12 +26,16 @@ use ballista_core::event_loop::{EventAction, EventSender};
 
 use crate::metrics::SchedulerMetricsCollector;
 use crate::scheduler_server::timestamp_millis;
+use ballista_core::unbounded_event_loop::UnboundedEventLoop;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use crate::scheduler_server::event::QueryStageSchedulerEvent;
+use crate::scheduler_server::event::{
+    JobDataCleanupEvent, JobStateCleanupEvent, QueryStageSchedulerEvent,
+};
+use crate::state::cleaner::{JobDataCleaner, JobStateCleaner};
 
 use crate::state::SchedulerState;
 
@@ -40,6 +44,8 @@ pub(crate) struct QueryStageScheduler<
     U: 'static + AsExecutionPlan,
 > {
     state: Arc<SchedulerState<T, U>>,
+    job_data_cleaner_event_loop: UnboundedEventLoop<JobDataCleanupEvent>,
+    job_state_cleaner_event_loop: UnboundedEventLoop<JobStateCleanupEvent>,
     metrics_collector: Arc<dyn SchedulerMetricsCollector>,
     event_expected_processing_duration: u64,
 }
@@ -50,8 +56,27 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
         metrics_collector: Arc<dyn SchedulerMetricsCollector>,
         event_expected_processing_duration: u64,
     ) -> Self {
+        let job_data_cleaner = JobDataCleaner::new(state.clone());
+        let mut job_data_cleaner_event_loop = UnboundedEventLoop::new(
+            "JobDataCleaner".to_string(),
+            Arc::new(job_data_cleaner),
+        );
+        job_data_cleaner_event_loop
+            .start()
+            .expect("Fail to start the event loop for cleaning up job data");
+
+        let job_state_cleaner = JobStateCleaner::new(state.clone());
+        let mut job_state_cleaner_event_loop = UnboundedEventLoop::new(
+            "JobStateCleaner".to_string(),
+            Arc::new(job_state_cleaner),
+        );
+        job_state_cleaner_event_loop
+            .start()
+            .expect("Fail to start the event loop for cleaning up job state");
         Self {
             state,
+            job_data_cleaner_event_loop,
+            job_state_cleaner_event_loop,
             metrics_collector,
             event_expected_processing_duration,
         }
@@ -59,6 +84,69 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
 
     pub(crate) fn metrics_collector(&self) -> &dyn SchedulerMetricsCollector {
         self.metrics_collector.as_ref()
+    }
+
+    /// For cleaning up a successful job,
+    /// - clean the shuffle data on executors delayed
+    /// - clean the state on schedulers delayed
+    async fn clean_up_successful_job(&self, job_id: String) {
+        self.send_job_data_cleanup_event(job_id.clone(), true).await;
+        self.send_job_state_cleanup_event(job_id, true).await;
+    }
+
+    /// For cleaning up a failed job,
+    /// - clean the shuffle data on executors immediately
+    /// - clean the state on schedulers delayed
+    async fn clean_up_failed_job(&self, job_id: String) {
+        self.send_job_data_cleanup_event(job_id.clone(), false)
+            .await;
+        self.send_job_state_cleanup_event(job_id, true).await;
+    }
+
+    async fn send_job_data_cleanup_event(&self, job_id: String, delayed: bool) {
+        if let Ok(sender) = self.job_data_cleaner_event_loop.get_sender() {
+            let event = if delayed {
+                let deadline = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    .as_secs()
+                    + self
+                        .state
+                        .config
+                        .finished_job_data_clean_up_interval_seconds;
+                JobDataCleanupEvent::Delayed { job_id, deadline }
+            } else {
+                JobDataCleanupEvent::Immediate { job_id }
+            };
+            if let Err(e) = sender.post_event(event.clone()).await {
+                warn!("Fail to send event {:?} due to {:?}", event, e);
+            }
+        } else {
+            warn!("Fail to get event sender for JobDataCleanup");
+        }
+    }
+
+    async fn send_job_state_cleanup_event(&self, job_id: String, delayed: bool) {
+        if let Ok(sender) = self.job_state_cleaner_event_loop.get_sender() {
+            let event = if delayed {
+                let deadline = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    .as_secs()
+                    + self
+                        .state
+                        .config
+                        .finished_job_state_clean_up_interval_seconds;
+                JobStateCleanupEvent::Delayed { job_id, deadline }
+            } else {
+                JobStateCleanupEvent::Immediate { job_id }
+            };
+            if let Err(e) = sender.post_event(event.clone()).await {
+                warn!("Fail to send event {:?} due to {:?}", event, e);
+            }
+        } else {
+            warn!("Fail to get event sender for JobStateCleanup");
+        }
     }
 }
 
@@ -184,7 +272,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         job_id, e
                     );
                 }
-                self.state.clean_up_successful_job(job_id);
+
+                self.clean_up_successful_job(job_id).await;
             }
             QueryStageSchedulerEvent::JobRunningFailed {
                 job_id,
@@ -218,7 +307,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         );
                     }
                 }
-                self.state.clean_up_failed_job(job_id);
+
+                self.clean_up_failed_job(job_id).await;
             }
             QueryStageSchedulerEvent::JobUpdated(job_id) => {
                 info!("Job {} Updated", job_id);
@@ -248,7 +338,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         );
                     }
                 }
-                self.state.clean_up_failed_job(job_id);
+
+                self.clean_up_failed_job(job_id).await;
             }
             QueryStageSchedulerEvent::TaskUpdating(executor_id, tasks_status) => {
                 debug!(
@@ -323,7 +414,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 }
             }
             QueryStageSchedulerEvent::JobDataClean(job_id) => {
-                self.state.executor_manager.clean_up_job_data(job_id);
+                self.send_job_data_cleanup_event(job_id, false).await;
             }
         }
         if let Some((start, ec)) = time_recorder {

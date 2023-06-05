@@ -451,6 +451,15 @@ impl JobState for InMemoryJobState {
         Ok(())
     }
 
+    async fn remove_jobs(&self, job_ids: &[String]) -> Result<()> {
+        for job_id in job_ids {
+            if self.completed_jobs.remove(job_id).is_none() {
+                warn!("Tried to delete non-existent job {job_id} from state");
+            }
+        }
+        Ok(())
+    }
+
     async fn get_jobs(&self) -> Result<HashSet<String>> {
         Ok(self
             .completed_jobs
