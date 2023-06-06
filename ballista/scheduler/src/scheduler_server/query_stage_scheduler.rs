@@ -34,7 +34,7 @@ use tokio::time::Instant;
 use crate::scheduler_server::event::{
     JobDataCleanupEvent, JobStateCleanupEvent, QueryStageSchedulerEvent,
 };
-use crate::state::cleaner::{JobDataCleaner, JobStateCleaner};
+use crate::state::event_action::{JobDataCleaner, JobStateCleaner, OfferReviver};
 
 use crate::state::SchedulerState;
 
@@ -45,6 +45,7 @@ pub(crate) struct QueryStageScheduler<
     state: Arc<SchedulerState<T, U>>,
     job_data_cleaner_event_loop: EventLoop<JobDataCleanupEvent>,
     job_state_cleaner_event_loop: EventLoop<JobStateCleanupEvent>,
+    offer_reviver_event_loop: EventLoop<()>,
     metrics_collector: Arc<dyn SchedulerMetricsCollector>,
     event_expected_processing_duration: u64,
 }
@@ -74,10 +75,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
         job_state_cleaner_event_loop
             .start()
             .expect("Fail to start the event loop for cleaning up job state");
+
+        let offer_reviver = OfferReviver::new(state.clone());
+        let mut offer_reviver_event_loop = EventLoop::new(
+            "OfferReviver".to_string(),
+            state.config.event_loop_buffer_size as usize,
+            Arc::new(offer_reviver),
+        );
+        offer_reviver_event_loop
+            .start()
+            .expect("Fail to start the event loop for revive offers");
+
         Self {
             state,
             job_data_cleaner_event_loop,
             job_state_cleaner_event_loop,
+            offer_reviver_event_loop,
             metrics_collector,
             event_expected_processing_duration,
         }
@@ -168,6 +181,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
             }
         } else {
             warn!("Fail to get event sender for JobStateCleanup");
+        }
+    }
+
+    async fn send_revive_offers_event(&self) {
+        if let Ok(sender) = self.offer_reviver_event_loop.get_sender() {
+            if let Err(e) = sender.post_event(()).await {
+                error!("Fail to send revive offers event due to {:?}", e);
+            }
+        } else {
+            error!("Fail to get event sender for OfferReviver");
         }
     }
 }
@@ -401,7 +424,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 }
             }
             QueryStageSchedulerEvent::ReviveOffers => {
-                self.state.revive_offers().await?;
+                self.send_revive_offers_event().await;
             }
             QueryStageSchedulerEvent::ExecutorLost(executor_id, _) => {
                 match self.state.task_manager.executor_lost(&executor_id).await {

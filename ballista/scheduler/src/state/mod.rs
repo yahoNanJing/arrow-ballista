@@ -45,7 +45,7 @@ use log::{debug, error, info};
 use prost::Message;
 use tracing::warn;
 
-pub mod cleaner;
+pub mod event_action;
 pub mod execution_graph;
 pub mod execution_graph_dot;
 pub mod executor_manager;

@@ -83,7 +83,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     events.push(event);
                 }
                 Err(TryRecvError::Empty) => {
-                    info!("Fetched {} events", events.len());
+                    info!("Fetched {} clean job data events", events.len());
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -92,7 +92,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 }
             }
             if events.len() >= self.batch_size {
-                info!("Fetched a full batch {} events to deal with", events.len());
+                info!(
+                    "Fetched a full batch {} clean job data events to deal with",
+                    events.len()
+                );
                 break;
             }
         }
@@ -201,7 +204,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     events.push(event);
                 }
                 Err(TryRecvError::Empty) => {
-                    info!("Fetched {} events", events.len());
+                    info!("Fetched {} clean job state events", events.len());
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -210,7 +213,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 }
             }
             if events.len() >= self.batch_size {
-                info!("Fetched a full batch {} events to deal with", events.len());
+                info!(
+                    "Fetched a full batch {} clean job state events to deal with",
+                    events.len()
+                );
                 break;
             }
         }
@@ -263,5 +269,73 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
     fn on_error(&self, error: BallistaError) {
         error!("Error received by JobStateCleaner: {:?}", error);
+    }
+}
+
+/// EventAction for revive offers
+pub struct OfferReviver<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    state: Arc<SchedulerState<T, U>>,
+    batch_size: usize,
+}
+
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> OfferReviver<T, U> {
+    pub fn new(state: Arc<SchedulerState<T, U>>) -> Self {
+        Self::new_with_batch_size(state, 10)
+    }
+
+    pub fn new_with_batch_size(
+        state: Arc<SchedulerState<T, U>>,
+        batch_size: usize,
+    ) -> Self {
+        Self { state, batch_size }
+    }
+}
+
+#[async_trait]
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> event_loop::EventAction<()>
+    for OfferReviver<T, U>
+{
+    fn on_start(&self) {
+        info!("Starting OfferReviver");
+    }
+
+    fn on_stop(&self) {
+        info!("Stopping OfferReviver");
+    }
+
+    async fn on_receive(
+        &self,
+        _event: (),
+        _tx_event: &Sender<()>,
+        rx_event: &mut Receiver<()>,
+    ) -> Result<()> {
+        let mut num_events = 1usize;
+        // Try to fetch events by non-blocking mode as many as possible
+        loop {
+            match rx_event.try_recv() {
+                Ok(_) => {
+                    num_events += 1;
+                }
+                Err(TryRecvError::Empty) => {
+                    info!("Fetched {} revive offers events", num_events);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    info!("Channel is closed and will exit the loop");
+                    return Ok(());
+                }
+            }
+
+            if num_events >= self.batch_size {
+                info!("Drained {} revive offers events to deal with", num_events);
+                break;
+            }
+        }
+
+        self.state.revive_offers().await
+    }
+
+    fn on_error(&self, error: BallistaError) {
+        error!("Error received by OfferReviver: {:?}", error);
     }
 }
