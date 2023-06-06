@@ -218,13 +218,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         Ok(())
     }
 
-    pub fn get_active_job_cache(&self) -> Arc<HashMap<String, JobInfoCache>> {
+    pub fn get_running_job_cache(&self) -> Arc<HashMap<String, JobInfoCache>> {
         let ret = self
             .active_job_cache
             .iter()
-            .map(|pair| {
+            .filter_map(|pair| {
                 let (job_id, job_info) = pair.pair();
-                (job_id.clone(), job_info.clone())
+                if matches!(job_info.status, Some(job_status::Status::Running(_))) {
+                    Some((job_id.clone(), job_info.clone()))
+                } else {
+                    None
+                }
             })
             .collect::<HashMap<_, _>>();
         Arc::new(ret)
