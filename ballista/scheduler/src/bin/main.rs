@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
         };
         // log and fmt layer
         let log_fmt_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(true)
+            .with_ansi(false)
             .with_thread_names(print_thread_info)
             .with_thread_ids(print_thread_info)
             .with_writer(log_file)
@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
     } else {
         // std io
         let log_fmt_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(true)
+            .with_ansi(false)
             .with_thread_names(print_thread_info)
             .with_thread_ids(print_thread_info)
             .with_writer(io::stdout)
