@@ -22,11 +22,10 @@ use async_trait::async_trait;
 use log::{debug, error, info, warn};
 
 use ballista_core::error::{BallistaError, Result};
-use ballista_core::event_loop::{EventAction, EventSender};
+use ballista_core::event_loop::{EventAction, EventLoop, EventSender};
 
 use crate::metrics::SchedulerMetricsCollector;
 use crate::scheduler_server::timestamp_millis;
-use ballista_core::unbounded_event_loop::UnboundedEventLoop;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use tokio::sync::mpsc;
@@ -44,8 +43,8 @@ pub(crate) struct QueryStageScheduler<
     U: 'static + AsExecutionPlan,
 > {
     state: Arc<SchedulerState<T, U>>,
-    job_data_cleaner_event_loop: UnboundedEventLoop<JobDataCleanupEvent>,
-    job_state_cleaner_event_loop: UnboundedEventLoop<JobStateCleanupEvent>,
+    job_data_cleaner_event_loop: EventLoop<JobDataCleanupEvent>,
+    job_state_cleaner_event_loop: EventLoop<JobStateCleanupEvent>,
     metrics_collector: Arc<dyn SchedulerMetricsCollector>,
     event_expected_processing_duration: u64,
 }
@@ -57,8 +56,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
         event_expected_processing_duration: u64,
     ) -> Self {
         let job_data_cleaner = JobDataCleaner::new(state.clone());
-        let mut job_data_cleaner_event_loop = UnboundedEventLoop::new(
+        let mut job_data_cleaner_event_loop = EventLoop::new(
             "JobDataCleaner".to_string(),
+            state.config.event_loop_buffer_size as usize,
             Arc::new(job_data_cleaner),
         );
         job_data_cleaner_event_loop
@@ -66,8 +66,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
             .expect("Fail to start the event loop for cleaning up job data");
 
         let job_state_cleaner = JobStateCleaner::new(state.clone());
-        let mut job_state_cleaner_event_loop = UnboundedEventLoop::new(
+        let mut job_state_cleaner_event_loop = EventLoop::new(
             "JobStateCleaner".to_string(),
+            state.config.event_loop_buffer_size as usize,
             Arc::new(job_state_cleaner),
         );
         job_state_cleaner_event_loop
@@ -166,7 +167,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         &self,
         event: QueryStageSchedulerEvent,
         tx_event: &mpsc::Sender<QueryStageSchedulerEvent>,
-        _rx_event: &mpsc::Receiver<QueryStageSchedulerEvent>,
+        _rx_event: &mut mpsc::Receiver<QueryStageSchedulerEvent>,
     ) -> Result<()> {
         let mut time_recorder = None;
         if self.event_expected_processing_duration > 0 {

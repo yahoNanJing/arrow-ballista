@@ -25,10 +25,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use ballista_core::error::{BallistaError, Result};
-use ballista_core::unbounded_event_loop;
+use ballista_core::event_loop;
 
 use crate::scheduler_server::event::{JobDataCleanupEvent, JobStateCleanupEvent};
 use crate::state::SchedulerState;
@@ -59,7 +59,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> JobDataCleaner<T,
 
 #[async_trait]
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
-    unbounded_event_loop::EventAction<JobDataCleanupEvent> for JobDataCleaner<T, U>
+    event_loop::EventAction<JobDataCleanupEvent> for JobDataCleaner<T, U>
 {
     fn on_start(&self) {
         info!("Starting JobDataCleaner");
@@ -72,8 +72,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     async fn on_receive(
         &self,
         event: JobDataCleanupEvent,
-        tx_event: &UnboundedSender<JobDataCleanupEvent>,
-        rx_event: &mut UnboundedReceiver<JobDataCleanupEvent>,
+        tx_event: &Sender<JobDataCleanupEvent>,
+        rx_event: &mut Receiver<JobDataCleanupEvent>,
     ) -> Result<()> {
         let mut events = vec![event];
         // Try to fetch events by non-blocking mode as many as possible
@@ -120,6 +120,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                                 job_id: job_id.clone(),
                                 deadline,
                             })
+                            .await
                             .is_err()
                         {
                             error!("Fail to send JobDataCleanupEvent({job_id}, {deadline}) to the channel");
@@ -176,7 +177,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> JobStateCleaner<T
 
 #[async_trait]
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
-    unbounded_event_loop::EventAction<JobStateCleanupEvent> for JobStateCleaner<T, U>
+    event_loop::EventAction<JobStateCleanupEvent> for JobStateCleaner<T, U>
 {
     fn on_start(&self) {
         info!("Starting JobStateCleaner");
@@ -189,8 +190,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     async fn on_receive(
         &self,
         event: JobStateCleanupEvent,
-        tx_event: &UnboundedSender<JobStateCleanupEvent>,
-        rx_event: &mut UnboundedReceiver<JobStateCleanupEvent>,
+        tx_event: &Sender<JobStateCleanupEvent>,
+        rx_event: &mut Receiver<JobStateCleanupEvent>,
     ) -> Result<()> {
         let mut events = vec![event];
         // Try to fetch events by non-blocking mode as many as possible
@@ -237,6 +238,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                                 job_id: job_id.clone(),
                                 deadline,
                             })
+                            .await
                             .is_err()
                         {
                             error!("Fail to send JobStateCleanupEvent({job_id}, {deadline}) to the channel");
