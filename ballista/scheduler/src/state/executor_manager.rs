@@ -147,15 +147,17 @@ impl ExecutorManager {
         for executor in alive_executors {
             let job_ids = job_ids.clone();
             if let Ok(mut client) = self.get_client(&executor).await {
-                if let Err(err) = client
-                    .remove_job_data(RemoveJobDataParams { job_ids })
-                    .await
-                {
-                    warn!(
-                        "Failed to call remove_job_data on Executor {} due to {:?}",
-                        executor, err
-                    )
-                }
+                tokio::spawn(async move {
+                    if let Err(err) = client
+                        .remove_job_data(RemoveJobDataParams { job_ids })
+                        .await
+                    {
+                        warn!(
+                            "Failed to call remove_job_data on Executor {} due to {:?}",
+                            executor, err
+                        )
+                    }
+                });
             } else {
                 warn!("Failed to get client for Executor {}", executor)
             }

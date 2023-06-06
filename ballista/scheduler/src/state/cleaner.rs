@@ -133,10 +133,13 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             assert!(min_deadline > now_epoch_ts);
             tokio::time::sleep(Duration::from_secs(min_deadline - now_epoch_ts)).await;
         } else {
-            self.state
-                .executor_manager
-                .clean_up_job_data(Vec::from_iter(jobs_to_clean.into_iter()))
-                .await;
+            let state = self.state.clone();
+            tokio::spawn(async move {
+                state
+                    .executor_manager
+                    .clean_up_job_data(Vec::from_iter(jobs_to_clean.into_iter()))
+                    .await;
+            });
         }
 
         Ok(())
