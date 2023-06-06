@@ -91,8 +91,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
     /// - clean the shuffle data on executors delayed
     /// - clean the state on schedulers delayed
     async fn clean_up_successful_job(&self, job_id: String) {
-        self.send_job_data_cleanup_event(job_id.clone(), true).await;
-        self.send_job_state_cleanup_event(job_id, true).await;
+        if self
+            .state
+            .config
+            .finished_job_data_clean_up_interval_seconds
+            > 0
+        {
+            self.send_job_data_cleanup_event(job_id.clone(), true).await;
+        }
+        if self
+            .state
+            .config
+            .finished_job_state_clean_up_interval_seconds
+            > 0
+        {
+            self.send_job_state_cleanup_event(job_id, true).await;
+        }
     }
 
     /// For cleaning up a failed job,
@@ -101,7 +115,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
     async fn clean_up_failed_job(&self, job_id: String) {
         self.send_job_data_cleanup_event(job_id.clone(), false)
             .await;
-        self.send_job_state_cleanup_event(job_id, true).await;
+        if self
+            .state
+            .config
+            .finished_job_state_clean_up_interval_seconds
+            > 0
+        {
+            self.send_job_state_cleanup_event(job_id, true).await;
+        }
     }
 
     async fn send_job_data_cleanup_event(&self, job_id: String, delayed: bool) {
