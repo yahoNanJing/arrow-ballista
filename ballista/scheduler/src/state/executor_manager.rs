@@ -77,7 +77,7 @@ impl ExecutorManager {
     pub async fn bind_schedulable_tasks(
         &self,
         distribution: TaskDistribution,
-        active_jobs: Arc<DashMap<String, JobInfoCache>>,
+        active_jobs: Arc<HashMap<String, JobInfoCache>>,
     ) -> Result<Vec<BoundTask>> {
         if active_jobs.is_empty() {
             warn!("There's no active jobs for binding tasks");

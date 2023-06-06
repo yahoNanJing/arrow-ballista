@@ -219,7 +219,7 @@ impl<S: KeyValueStore, T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     async fn bind_schedulable_tasks(
         &self,
         distribution: TaskDistribution,
-        active_jobs: Arc<DashMap<String, JobInfoCache>>,
+        active_jobs: Arc<HashMap<String, JobInfoCache>>,
         executors: Option<HashSet<String>>,
     ) -> Result<Vec<BoundTask>> {
         let lock = self.store.lock(Keyspace::Slots, "global").await?;

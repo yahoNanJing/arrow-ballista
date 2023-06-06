@@ -159,7 +159,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             .executor_manager
             .bind_schedulable_tasks(
                 self.config.task_distribution,
-                self.task_manager.active_job_cache.clone(),
+                self.task_manager.get_active_job_cache(),
             )
             .await?;
         if schedulable_tasks.is_empty() {

@@ -113,7 +113,7 @@ pub struct TaskManager<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     codec: BallistaCodec<T, U>,
     scheduler_id: String,
     // Cache for active jobs curated by this scheduler
-    pub active_job_cache: ActiveJobCache,
+    active_job_cache: ActiveJobCache,
     launcher: Arc<dyn TaskLauncher>,
 }
 
@@ -124,7 +124,7 @@ pub struct JobInfoCache {
     // Cache for job status
     pub status: Option<job_status::Status>,
     // Cache for encoded execution stage plan to avoid duplicated encoding for multiple tasks
-    encoded_stage_plans: HashMap<usize, Vec<u8>>,
+    encoded_stage_plans: DashMap<usize, Vec<u8>>,
 }
 
 impl JobInfoCache {
@@ -133,7 +133,7 @@ impl JobInfoCache {
         Self {
             execution_graph: Arc::new(RwLock::new(graph)),
             status,
-            encoded_stage_plans: HashMap::new(),
+            encoded_stage_plans: DashMap::new(),
         }
     }
 }
@@ -216,6 +216,18 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
             .insert(job_id.to_owned(), JobInfoCache::new(graph));
 
         Ok(())
+    }
+
+    pub fn get_active_job_cache(&self) -> Arc<HashMap<String, JobInfoCache>> {
+        let ret = self
+            .active_job_cache
+            .iter()
+            .map(|pair| {
+                let (job_id, job_info) = pair.pair();
+                (job_id.clone(), job_info.clone())
+            })
+            .collect::<HashMap<_, _>>();
+        Arc::new(ret)
     }
 
     /// Get a list of active job ids
@@ -451,7 +463,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         let job_id = task.partition.job_id.clone();
         let stage_id = task.partition.stage_id;
 
-        if let Some(mut job_info) = self.active_job_cache.get_mut(&job_id) {
+        if let Some(job_info) = self.active_job_cache.get(&job_id) {
             let plan = if let Some(plan) = job_info.encoded_stage_plans.get(&stage_id) {
                 plan.clone()
             } else {
@@ -530,7 +542,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
                 trace!("With task details {:?}", tasks);
             }
 
-            if let Some(mut job_info) = self.active_job_cache.get_mut(&job_id) {
+            if let Some(job_info) = self.active_job_cache.get(&job_id) {
                 let plan = if let Some(plan) = job_info.encoded_stage_plans.get(&stage_id)
                 {
                     plan.clone()

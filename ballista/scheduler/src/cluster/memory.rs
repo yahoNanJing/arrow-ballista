@@ -102,7 +102,7 @@ impl ClusterState for InMemoryClusterState {
     async fn bind_schedulable_tasks(
         &self,
         distribution: TaskDistribution,
-        active_jobs: Arc<DashMap<String, JobInfoCache>>,
+        active_jobs: Arc<HashMap<String, JobInfoCache>>,
         executors: Option<HashSet<String>>,
     ) -> Result<Vec<BoundTask>> {
         let mut guard = self.task_slots.lock().await;

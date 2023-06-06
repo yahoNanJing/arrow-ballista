@@ -121,7 +121,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 slots: num_free_slots,
             }];
             let available_slots = available_slots.iter_mut().collect();
-            let active_jobs = self.state.task_manager.active_job_cache.clone();
+            let active_jobs = self.state.task_manager.get_active_job_cache();
             let schedulable_tasks = match self.state.config.task_distribution {
                 TaskDistribution::Bias => {
                     bind_task_bias(available_slots, active_jobs, |_| false).await

@@ -40,7 +40,6 @@ use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata, PartitionI
 use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::default_session_builder;
 use clap::ArgEnum;
-use dashmap::DashMap;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::physical_plan::file_format::get_scan_files;
 use datafusion::physical_plan::ExecutionPlan;
@@ -220,7 +219,7 @@ pub trait ClusterState: Send + Sync + 'static {
     async fn bind_schedulable_tasks(
         &self,
         distribution: TaskDistribution,
-        active_jobs: Arc<DashMap<String, JobInfoCache>>,
+        active_jobs: Arc<HashMap<String, JobInfoCache>>,
         executors: Option<HashSet<String>>,
     ) -> Result<Vec<BoundTask>>;
 
@@ -380,7 +379,7 @@ pub trait JobState: Send + Sync {
 
 pub(crate) async fn bind_task_bias(
     mut slots: Vec<&mut AvailableTaskSlots>,
-    active_jobs: Arc<DashMap<String, JobInfoCache>>,
+    active_jobs: Arc<HashMap<String, JobInfoCache>>,
     if_skip: fn(Arc<dyn ExecutionPlan>) -> bool,
 ) -> Vec<BoundTask> {
     let mut schedulable_tasks: Vec<BoundTask> = vec![];
@@ -396,8 +395,7 @@ pub(crate) async fn bind_task_bias(
 
     let mut idx_slot = 0usize;
     let mut slot = &mut slots[idx_slot];
-    for pairs in active_jobs.iter() {
-        let (job_id, job_info) = pairs.pair();
+    for (job_id, job_info) in active_jobs.iter() {
         if !matches!(job_info.status, Some(job_status::Status::Running(_))) {
             debug!(
                 "Job {} is not in running status and will be skipped",
@@ -468,7 +466,7 @@ pub(crate) async fn bind_task_bias(
 
 pub(crate) async fn bind_task_round_robin(
     mut slots: Vec<&mut AvailableTaskSlots>,
-    active_jobs: Arc<DashMap<String, JobInfoCache>>,
+    active_jobs: Arc<HashMap<String, JobInfoCache>>,
     if_skip: fn(Arc<dyn ExecutionPlan>) -> bool,
 ) -> Vec<BoundTask> {
     let mut schedulable_tasks: Vec<BoundTask> = vec![];
@@ -484,8 +482,7 @@ pub(crate) async fn bind_task_round_robin(
     slots.sort_by(|a, b| Ord::cmp(&b.slots, &a.slots));
 
     let mut idx_slot = 0usize;
-    for pairs in active_jobs.iter() {
-        let (job_id, job_info) = pairs.pair();
+    for (job_id, job_info) in active_jobs.iter() {
         if !matches!(job_info.status, Some(job_status::Status::Running(_))) {
             debug!(
                 "Job {} is not in running status and will be skipped",
@@ -568,7 +565,7 @@ pub(crate) async fn bind_task_consistent_hash(
     topology_nodes: HashMap<String, TopologyNode>,
     num_replicas: usize,
     tolerance: usize,
-    active_jobs: Arc<DashMap<String, JobInfoCache>>,
+    active_jobs: Arc<HashMap<String, JobInfoCache>>,
 ) -> Result<(Vec<BoundTask>, Option<ConsistentHash<TopologyNode>>)> {
     let mut total_slots = 0usize;
     for (_, node) in topology_nodes.iter() {
@@ -588,8 +585,7 @@ pub(crate) async fn bind_task_consistent_hash(
         ConsistentHash::new(node_replicas);
 
     let mut schedulable_tasks: Vec<BoundTask> = vec![];
-    for pairs in active_jobs.iter() {
-        let (job_id, job_info) = pairs.pair();
+    for (job_id, job_info) in active_jobs.iter() {
         if !matches!(job_info.status, Some(job_status::Status::Running(_))) {
             debug!(
                 "Job {} is not in running status and will be skipped",
