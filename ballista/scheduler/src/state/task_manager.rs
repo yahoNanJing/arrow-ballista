@@ -362,7 +362,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         failure_reason: String,
     ) -> Result<(Vec<RunningTaskInfo>, usize)> {
         let (tasks_to_cancel, pending_tasks) = if let Some(graph) =
-            self.get_active_execution_graph(job_id)
+            self.remove_active_execution_graph(job_id)
         {
             let mut guard = graph.write().await;
 
