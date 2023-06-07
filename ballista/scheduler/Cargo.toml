@@ -86,7 +86,7 @@ tracing-subscriber = { version = "0.3.15", features = [
 ] }
 uuid = { version = "1.0", features = ["v4"] }
 warp = "0.3"
-zookeeper = "0.7.0"
+zookeeper = { git = 'https://github.com/liukun4515/rust-zookeeper.git' }
 console-subscriber = { version = "0.1.9", optional = true }
 
 [dev-dependencies]

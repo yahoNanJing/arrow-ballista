@@ -1,7 +1,7 @@
 use crate::scheduler_server::SchedulerServer;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
-use log::{info, warn};
+use log::{error, info, warn};
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -334,13 +334,18 @@ impl SchedulerZkLeaderService {
             } else {
                 let leader_latch = self.zk_leader_latch.as_ref().unwrap();
                 match (self.is_leader(), leader_latch.has_leadership()) {
-                    (true, false) => {
+                    (true, Ok(false)) => {
                         // leader -> follower
                         self.change_to_follower(&rt);
                     }
-                    (false, true) => {
+                    (false, Ok(true)) => {
                         // follower -> leader
                         self.change_to_leader(&rt);
+                    }
+                    (_, Err(leader_latch_error)) => {
+                        error!("Meet the error {:?} for the leader latch, and will create the new connection and leader latch to fix it.", leader_latch_error);
+                        self.change_connection_state(false);
+                        continue;
                     }
                     _ => {}
                 }
