@@ -280,7 +280,7 @@ pub struct OfferReviver<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> OfferReviver<T, U> {
     pub fn new(state: Arc<SchedulerState<T, U>>) -> Self {
-        Self::new_with_batch_size(state, 10)
+        Self::new_with_batch_size(state, 100)
     }
 
     pub fn new_with_batch_size(
