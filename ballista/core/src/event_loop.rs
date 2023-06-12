@@ -77,20 +77,19 @@ impl<E: Send + 'static + Debug> EventLoop<E> {
         tokio::spawn(async move {
             info!("Starting the event loop {}", name);
             loop {
-                tokio::select! {
-                    Some(event) = rx_event.recv() => {
-                        // TODO: if this scheduler is not the leader
-                        if stopped.load(Ordering::SeqCst) {
-                            warn!("The event loop was stopped, but receive an event, ignore this event {:?}", event);
-                        } else if let Err(e) = action.on_receive(event, &tx_event, &mut rx_event).await {
-                                error!("Fail to process event due to {}", e);
-                                action.on_error(e);
-                        }
-                    },
-                    else => {
-                        info!("Event Channel closed, shutting down");
-                        break;
-                    },
+                if let Some(event) = rx_event.recv().await {
+                    // TODO: if this scheduler is not the leader
+                    if stopped.load(Ordering::SeqCst) {
+                        warn!("The event loop was stopped, but receive an event, ignore this event {:?}", event);
+                    } else if let Err(e) =
+                        action.on_receive(event, &tx_event, &mut rx_event).await
+                    {
+                        error!("Fail to process event due to {}", e);
+                        action.on_error(e);
+                    }
+                } else {
+                    info!("Event Channel closed, shutting down");
+                    break;
                 }
             }
             info!("The event loop {} has been stopped", name);
