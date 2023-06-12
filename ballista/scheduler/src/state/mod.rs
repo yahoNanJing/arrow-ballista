@@ -234,14 +234,25 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
                             .launch_multi_task(&executor, tasks, &executor_manager)
                             .await
                         {
-                            error!("Failed to launch new task: {:?}", e);
+                            let err_msg = format!("Failed to launch new task: {e}");
+                            error!("{}", err_msg.clone());
+
+                            // It's OK to remove executor aggressively,
+                            // since if the executor is in healthy state, it will be registered again.
+                            if let Err(e) = executor_manager
+                                .remove_executor(&executor_id, Some(err_msg))
+                                .await
+                            {
+                                error!("error removing executor {executor_id}: {e}");
+                            }
+
                             false
                         } else {
                             true
                         }
                     }
                     Err(e) => {
-                        error!("Failed to launch new task, could not get executor metadata: {:?}", e);
+                        error!("Failed to launch new task, could not get executor metadata: {}", e);
                         false
                     }
                 };
