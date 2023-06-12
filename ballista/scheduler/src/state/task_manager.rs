@@ -426,13 +426,13 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
 
     /// return a Vec of running tasks need to cancel
     pub async fn executor_lost(&self, executor_id: &str) -> Result<Vec<RunningTaskInfo>> {
+        let active_job_cache = self.get_running_job_cache();
         // Collect all the running task need to cancel when there are running stages rolled back.
         let mut running_tasks_to_cancel: Vec<RunningTaskInfo> = vec![];
         // Collect graphs we update so we can update them in storage
-        let updated_graphs: DashMap<String, ExecutionGraph> = DashMap::new();
+        let mut updated_graphs: HashMap<String, ExecutionGraph> = HashMap::new();
         {
-            for pairs in self.active_job_cache.iter() {
-                let (job_id, job_info) = pairs.pair();
+            for (job_id, job_info) in active_job_cache.iter() {
                 let mut graph = job_info.execution_graph.write().await;
                 let reset = graph.reset_stages_on_lost_executor(executor_id)?;
                 if !reset.0.is_empty() {

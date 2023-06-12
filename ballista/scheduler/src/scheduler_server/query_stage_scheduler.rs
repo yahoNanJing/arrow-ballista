@@ -426,7 +426,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             QueryStageSchedulerEvent::ReviveOffers => {
                 self.send_revive_offers_event().await;
             }
-            QueryStageSchedulerEvent::ExecutorLost(executor_id, _) => {
+            QueryStageSchedulerEvent::ExecutorLost(executor_id, reason) => {
+                // It's OK to remove the executor before sending this event
+                // Just to make sure the executor be removed
+                if let Err(e) = self
+                    .state
+                    .executor_manager
+                    .remove_executor(&executor_id, reason)
+                    .await
+                {
+                    warn!("Fail to remove executor {}: {}", executor_id, e);
+                }
                 match self.state.task_manager.executor_lost(&executor_id).await {
                     Ok(tasks) => {
                         if !tasks.is_empty() {
@@ -441,11 +451,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         }
                     }
                     Err(e) => {
-                        let msg = format!(
-                            "TaskManager error to handle Executor {executor_id} lost: {e}"
+                        error!(
+                            "TaskManager error to handle Executor {} lost: {}",
+                            executor_id, e
                         );
-                        error!("{}", msg);
                     }
+                }
+                if self.state.config.is_push_staged_scheduling() {
+                    tx_event
+                        .post_event(QueryStageSchedulerEvent::ReviveOffers)
+                        .await?;
                 }
             }
             QueryStageSchedulerEvent::CancelTasks(tasks) => {
