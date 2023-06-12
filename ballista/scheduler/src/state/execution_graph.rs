@@ -1170,10 +1170,19 @@ impl ExecutionGraph {
     /// Convert running stage to be successful
     pub fn succeed_stage(&mut self, stage_id: usize) -> bool {
         if let Some(ExecutionStage::Running(stage)) = self.stages.remove(&stage_id) {
-            self.stages
-                .insert(stage_id, ExecutionStage::Successful(stage.to_successful()));
-            self.clear_stage_failure(stage_id);
-            true
+            match stage.to_successful() {
+                Ok(successful_stage) => {
+                    self.stages
+                        .insert(stage_id, ExecutionStage::Successful(successful_stage));
+                    self.clear_stage_failure(stage_id);
+                    true
+                }
+                Err(e) => {
+                    error!("Fail to convert the running stage {}/{} to be successful due to {}", self.job_id(),
+                stage_id, e);
+                    false
+                }
+            }
         } else {
             warn!(
                 "Fail to find a running stage {}/{} to make it success",

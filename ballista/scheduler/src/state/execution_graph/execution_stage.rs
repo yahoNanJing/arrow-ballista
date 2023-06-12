@@ -605,25 +605,27 @@ impl RunningStage {
         }
     }
 
-    pub(super) fn to_successful(&self) -> SuccessfulStage {
+    pub(super) fn to_successful(&self) -> Result<SuccessfulStage> {
         let task_infos = self
             .task_infos
             .iter()
             .enumerate()
             .map(|(partition_id, info)| {
-                info.clone().unwrap_or_else(|| {
-                    panic!(
+                if let Some(info) = info.clone() {
+                    Ok(info)
+                } else {
+                    Err(BallistaError::Internal(format!(
                         "TaskInfo for task {}.{}/{} should not be none",
                         self.stage_id, self.stage_attempt_num, partition_id
-                    )
-                })
+                    )))
+                }
             })
-            .collect();
+            .collect::<Result<Vec<TaskInfo>>>()?;
         let stage_metrics = self.stage_metrics.clone().unwrap_or_else(|| {
             warn!("The metrics for stage {} should not be none", self.stage_id);
             vec![]
         });
-        SuccessfulStage {
+        Ok(SuccessfulStage {
             stage_id: self.stage_id,
             stage_attempt_num: self.stage_attempt_num,
             partitions: self.partitions,
@@ -633,7 +635,7 @@ impl RunningStage {
             plan: self.plan.clone(),
             task_infos,
             stage_metrics,
-        }
+        })
     }
 
     pub(super) fn to_failed(&self, error_message: String) -> FailedStage {
