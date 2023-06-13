@@ -43,6 +43,7 @@ use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use log::{debug, error, info};
 use prost::Message;
+use tokio::sync::mpsc::Sender;
 use tracing::warn;
 
 pub mod event_action;
@@ -154,7 +155,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         self.executor_manager.init().await
     }
 
-    pub(crate) async fn revive_offers(&self) -> Result<()> {
+    pub(crate) async fn revive_offers(&self, tx_event: Sender<()>) -> Result<()> {
         let schedulable_tasks = self
             .executor_manager
             .bind_schedulable_tasks(
@@ -169,18 +170,69 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
 
         let state = self.clone();
         tokio::spawn(async move {
-            let unassigned_executor_slots = state.launch_tasks(schedulable_tasks).await?;
-            if !unassigned_executor_slots.is_empty() {
-                state
-                    .executor_manager
-                    .unbind_tasks(unassigned_executor_slots)
-                    .await?;
+            let mut if_revive = false;
+            match state.launch_tasks(schedulable_tasks).await {
+                Ok(unassigned_executor_slots) => {
+                    if !unassigned_executor_slots.is_empty() {
+                        if let Err(e) = state
+                            .executor_manager
+                            .unbind_tasks(unassigned_executor_slots)
+                            .await
+                        {
+                            error!("Fail to unbind tasks: {}", e);
+                        }
+                        if_revive = true;
+                    }
+                }
+                Err(e) => {
+                    error!("Fail to launch tasks: {}", e);
+                    if_revive = true;
+                }
             }
-
-            Ok::<(), BallistaError>(())
+            if if_revive {
+                if let Err(e) = tx_event.send(()).await {
+                    error!("Fail to send revive offers event due to {:?}", e);
+                }
+            }
         });
 
         Ok(())
+    }
+
+    /// Remove an executor.
+    /// 1. The executor related info will be removed from [`ExecutorManager`]
+    /// 2. All of affected running execution graph will be rolled backed
+    /// 3. All of the running tasks of the affected running stages will be cancelled
+    pub(crate) async fn remove_executor(
+        &self,
+        executor_id: &str,
+        reason: Option<String>,
+    ) {
+        if let Err(e) = self
+            .executor_manager
+            .remove_executor(executor_id, reason)
+            .await
+        {
+            warn!("Fail to remove executor {}: {}", executor_id, e);
+        }
+
+        match self.task_manager.executor_lost(executor_id).await {
+            Ok(tasks) => {
+                if !tasks.is_empty() {
+                    if let Err(e) =
+                        self.executor_manager.cancel_running_tasks(tasks).await
+                    {
+                        warn!("Fail to cancel running tasks due to {:?}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!(
+                    "TaskManager error to handle Executor {} lost: {}",
+                    executor_id, e
+                );
+            }
+        }
     }
 
     /// Given a vector of bound tasks,
@@ -222,16 +274,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             // Total number of tasks to be launched for one executor
             let n_tasks: usize = tasks.iter().map(|stage_tasks| stage_tasks.len()).sum();
 
-            let task_manager = self.task_manager.clone();
-            let executor_manager = self.executor_manager.clone();
+            let state = self.clone();
             let join_handle = tokio::spawn(async move {
-                let success = match executor_manager
+                let success = match state
+                    .executor_manager
                     .get_executor_metadata(&executor_id)
                     .await
                 {
                     Ok(executor) => {
-                        if let Err(e) = task_manager
-                            .launch_multi_task(&executor, tasks, &executor_manager)
+                        if let Err(e) = state
+                            .task_manager
+                            .launch_multi_task(&executor, tasks, &state.executor_manager)
                             .await
                         {
                             let err_msg = format!("Failed to launch new task: {e}");
@@ -239,12 +292,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
 
                             // It's OK to remove executor aggressively,
                             // since if the executor is in healthy state, it will be registered again.
-                            if let Err(e) = executor_manager
-                                .remove_executor(&executor_id, Some(err_msg))
-                                .await
-                            {
-                                error!("error removing executor {executor_id}: {e}");
-                            }
+                            state.remove_executor(&executor_id, Some(err_msg)).await;
 
                             false
                         } else {

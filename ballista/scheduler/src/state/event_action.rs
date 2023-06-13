@@ -306,7 +306,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> event_loop::Event
     async fn on_receive(
         &self,
         _event: (),
-        _tx_event: &Sender<()>,
+        tx_event: &Sender<()>,
         rx_event: &mut Receiver<()>,
     ) -> Result<()> {
         let mut num_events = 1usize;
@@ -332,7 +332,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> event_loop::Event
             }
         }
 
-        self.state.revive_offers().await
+        self.state.revive_offers(tx_event.clone()).await
     }
 
     fn on_error(&self, error: BallistaError) {
