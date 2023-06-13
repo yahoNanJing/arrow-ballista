@@ -183,8 +183,6 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         #[cfg(not(feature = "executor-profile"))]
         tracing_subscriber::registry().with(log_fmt_layer).init();
     }
-    // reset the panic hook, and log the panic log-fmt
-    log_panics::init();
 
     let addr = format!("{}:{}", opt.bind_host, opt.port);
     let addr = addr

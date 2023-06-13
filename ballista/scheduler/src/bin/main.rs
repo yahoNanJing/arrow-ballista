@@ -137,8 +137,6 @@ async fn main() -> Result<()> {
         #[cfg(not(feature = "scheduler-profile"))]
         tracing_subscriber::registry().with(log_fmt_layer).init();
     }
-    // reset the panic hook, and log the panic log-fmt
-    log_panics::init();
 
     let addr = format!("{}:{}", opt.bind_host, opt.bind_port);
     let addr = addr.parse()?;
