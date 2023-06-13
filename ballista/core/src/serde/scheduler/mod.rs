@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::{Debug, Formatter};
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use datafusion::arrow::array::{
@@ -62,13 +63,33 @@ impl PartitionId {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PartitionLocation {
     pub map_partition_id: usize,
     pub partition_id: PartitionId,
     pub executor_meta: ExecutorMetadata,
     pub partition_stats: PartitionStats,
     pub path: String,
+}
+
+impl Debug for PartitionLocation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "PartitionLocation {{ ")?;
+        write!(f, "map_partition_id: {:?}", self.map_partition_id)?;
+        write!(f, ", partition_id: {:?}", self.partition_id)?;
+        // ExecutorMetadata
+        {
+            write!(f, ", executor_meta: ExecutorMetadata {{ ")?;
+            write!(f, "id: {:?}", self.executor_meta.id)?;
+            write!(f, ", host: {:?}", self.executor_meta.host)?;
+            write!(f, ", port: {:?}", self.executor_meta.port)?;
+            write!(f, " }}")?;
+        }
+        write!(f, ", partition_stats: {:?}", self.partition_stats)?;
+        write!(f, ", path: {:?}", self.path)?;
+        write!(f, " }}")?;
+        Ok(())
+    }
 }
 
 /// Meta-data for an executor, used when fetching shuffle partitions from other executors

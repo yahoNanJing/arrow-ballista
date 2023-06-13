@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::pin::Pin;
 use std::result;
@@ -56,11 +56,11 @@ use tokio_stream::wrappers::ReceiverStream;
 
 /// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
 /// being executed by an executor
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ShuffleReaderExec {
+    pub(crate) schema: SchemaRef,
     /// Each partition of a shuffle can read data from multiple locations
     pub partition: Vec<Vec<PartitionLocation>>,
-    pub(crate) schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -76,6 +76,43 @@ impl ShuffleReaderExec {
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
         })
+    }
+}
+
+impl Debug for ShuffleReaderExec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ShuffleReaderExec {{ ")?;
+        write!(f, "schema: {:?}", self.schema)?;
+        write!(f, ", partition {}: [", self.partition.len())?;
+        let max_groups = 5;
+        let mut first_group = true;
+        for group in self.partition.iter().take(max_groups) {
+            if !first_group {
+                write!(f, ", ")?;
+            }
+            first_group = false;
+            write!(f, "{} [", group.len())?;
+            let mut first_part = true;
+            for part in group.iter().take(max_groups) {
+                if !first_part {
+                    write!(f, ", ")?;
+                }
+                first_part = false;
+                write!(f, "{:?}", part)?;
+            }
+            if group.len() > max_groups {
+                write!(f, ", ...")?;
+            }
+            write!(f, "]")?;
+        }
+        if self.partition.len() > max_groups {
+            write!(f, ", ...")?;
+        }
+        write!(f, "]")?;
+        write!(f, ", metrics: {:?}", self.metrics)?;
+        write!(f, " }}")?;
+
+        Ok(())
     }
 }
 
@@ -446,6 +483,45 @@ mod tests {
     use datafusion::physical_plan::memory::MemoryExec;
     use datafusion::prelude::SessionContext;
     use tempfile::{tempdir, TempDir};
+
+    #[tokio::test]
+    async fn test_debug_shuffle_reader_exec() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]);
+
+        let job_id = "test_job_1";
+        let mut partitions: Vec<PartitionLocation> = vec![];
+        for partition_id in 0..10 {
+            partitions.push(PartitionLocation {
+                map_partition_id: 0,
+                partition_id: PartitionId {
+                    job_id: job_id.to_string(),
+                    stage_id: 2,
+                    partition_id,
+                },
+                executor_meta: ExecutorMetadata {
+                    id: "executor_1".to_string(),
+                    host: "executor_1".to_string(),
+                    port: 7070,
+                    grpc_port: 8080,
+                    specification: ExecutorSpecification { task_slots: 1 },
+                },
+                partition_stats: Default::default(),
+                path: "test_path".to_string(),
+            })
+        }
+
+        let shuffle_reader_exec =
+            ShuffleReaderExec::try_new(vec![partitions], Arc::new(schema))?;
+
+        let expected = "ShuffleReaderExec { schema: Schema { fields: [Field { name: \"a\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"c\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, partition 1: [10 [PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 0 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 1 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 2 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 3 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 4 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, ...]], metrics: ExecutionPlanMetricsSet { inner: Mutex { data: MetricsSet { metrics: [] } } } }";
+        assert_eq!(expected, format!("{shuffle_reader_exec:?}"));
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_stats_for_partitions_empty() {
