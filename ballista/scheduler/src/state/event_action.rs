@@ -83,7 +83,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     events.push(event);
                 }
                 Err(TryRecvError::Empty) => {
-                    info!("Fetched {} clean job data events", events.len());
+                    info!("{} clean job data events fetched", events.len());
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -93,7 +93,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             }
             if events.len() >= self.batch_size {
                 info!(
-                    "Fetched a full batch {} clean job data events to deal with",
+                    "{} clean job data events as a full batch drained",
                     events.len()
                 );
                 break;
@@ -220,7 +220,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     events.push(event);
                 }
                 Err(TryRecvError::Empty) => {
-                    info!("Fetched {} clean job state events", events.len());
+                    info!("{} clean job state events fetched", events.len());
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -230,7 +230,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             }
             if events.len() >= self.batch_size {
                 info!(
-                    "Fetched a full batch {} clean job state events to deal with",
+                    "{} clean job state events as a full batch drained",
                     events.len()
                 );
                 break;
@@ -349,7 +349,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> event_loop::Event
                     num_events += 1;
                 }
                 Err(TryRecvError::Empty) => {
-                    info!("Fetched {} revive offers events", num_events);
+                    info!("{} revive offers events fetched", num_events);
                     break;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -359,7 +359,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> event_loop::Event
             }
 
             if num_events >= self.batch_size {
-                info!("Drained {} revive offers events to deal with", num_events);
+                info!(
+                    "{} revive offers events as a full batch drained",
+                    num_events
+                );
                 break;
             }
         }

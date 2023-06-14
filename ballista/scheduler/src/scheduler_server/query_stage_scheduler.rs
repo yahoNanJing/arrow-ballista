@@ -275,9 +275,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 info!("Job {} submitted", job_id);
 
                 if self.state.config.is_push_staged_scheduling() {
-                    tx_event
-                        .post_event(QueryStageSchedulerEvent::ReviveOffers)
-                        .await?;
+                    self.send_revive_offers_event().await;
                 }
             }
             QueryStageSchedulerEvent::JobPlanningFailed {
@@ -409,9 +407,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                             tx_event.post_event(stage_event).await?;
                         }
                         if self.state.config.is_push_staged_scheduling() {
-                            tx_event
-                                .post_event(QueryStageSchedulerEvent::ReviveOffers)
-                                .await?;
+                            self.send_revive_offers_event().await;
                         }
                     }
                     Err(e) => {
@@ -429,9 +425,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             QueryStageSchedulerEvent::ExecutorLost(executor_id, reason) => {
                 self.state.remove_executor(&executor_id, reason).await;
                 if self.state.config.is_push_staged_scheduling() {
-                    tx_event
-                        .post_event(QueryStageSchedulerEvent::ReviveOffers)
-                        .await?;
+                    self.send_revive_offers_event().await;
                 }
             }
             QueryStageSchedulerEvent::CancelTasks(tasks) => {
