@@ -76,6 +76,7 @@ uuid = { version = "1.0", features = ["v4"] }
 zookeeper = { git = 'https://github.com/liukun4515/rust-zookeeper.git' }
 rand = "0.8"
 console-subscriber = { version = "0.1.9", optional = true }
+log-panics = { version = "2.1.0", features = ["with-backtrace"]}
 
 [dev-dependencies]
 
