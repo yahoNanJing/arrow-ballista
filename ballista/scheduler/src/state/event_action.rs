@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use log::{error, info};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::error::TryRecvError;
@@ -105,6 +105,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .expect("Time went backwards")
             .as_secs();
         let mut jobs_to_clean = HashSet::new();
+        let mut jobs_delayed_to_clean = HashMap::new();
         let mut min_deadline = now_epoch_ts + self.sleep_ts;
         for event in events {
             match event {
@@ -118,31 +119,46 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         if deadline < min_deadline {
                             min_deadline = deadline;
                         }
-                        if tx_event
-                            .send(JobDataCleanupEvent::Delayed {
-                                job_id: job_id.clone(),
-                                deadline,
-                            })
-                            .await
-                            .is_err()
-                        {
-                            error!("Fail to send JobDataCleanupEvent({job_id}, {deadline}) to the channel");
+                        let old_deadline = jobs_delayed_to_clean
+                            .entry(job_id.clone())
+                            .or_insert_with(|| deadline);
+                        // Set with smallest deadline
+                        if *old_deadline > deadline {
+                            *old_deadline = deadline;
                         }
                     }
                 }
             }
         }
 
-        if jobs_to_clean.is_empty() {
-            assert!(min_deadline > now_epoch_ts);
-            tokio::time::sleep(Duration::from_secs(min_deadline - now_epoch_ts)).await;
-        } else {
+        if !jobs_to_clean.is_empty() {
             let state = self.state.clone();
             tokio::spawn(async move {
                 state
                     .executor_manager
                     .clean_up_job_data(Vec::from_iter(jobs_to_clean.into_iter()))
                     .await;
+            });
+        }
+
+        if !jobs_delayed_to_clean.is_empty() {
+            let tx_event = tx_event.clone();
+            tokio::spawn(async move {
+                assert!(min_deadline > now_epoch_ts);
+                tokio::time::sleep(Duration::from_secs(min_deadline - now_epoch_ts))
+                    .await;
+                for (job_id, deadline) in jobs_delayed_to_clean {
+                    if tx_event
+                        .send(JobDataCleanupEvent::Delayed {
+                            job_id: job_id.clone(),
+                            deadline,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        error!("Fail to send JobDataCleanupEvent({job_id}, {deadline}) to the channel");
+                    }
+                }
             });
         }
 
@@ -226,6 +242,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .expect("Time went backwards")
             .as_secs();
         let mut jobs_to_clean = HashSet::new();
+        let mut jobs_delayed_to_clean = HashMap::new();
         let mut min_deadline = now_epoch_ts + self.sleep_ts;
         for event in events {
             match event {
@@ -239,29 +256,44 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         if deadline < min_deadline {
                             min_deadline = deadline;
                         }
-                        if tx_event
-                            .send(JobStateCleanupEvent::Delayed {
-                                job_id: job_id.clone(),
-                                deadline,
-                            })
-                            .await
-                            .is_err()
-                        {
-                            error!("Fail to send JobStateCleanupEvent({job_id}, {deadline}) to the channel");
+                        let old_deadline = jobs_delayed_to_clean
+                            .entry(job_id.clone())
+                            .or_insert_with(|| deadline);
+                        // Set with smallest deadline
+                        if *old_deadline > deadline {
+                            *old_deadline = deadline;
                         }
                     }
                 }
             }
         }
 
-        if jobs_to_clean.is_empty() {
-            assert!(min_deadline > now_epoch_ts);
-            tokio::time::sleep(Duration::from_secs(min_deadline - now_epoch_ts)).await;
-        } else {
+        if !jobs_to_clean.is_empty() {
             self.state
                 .task_manager
                 .remove_jobs(Vec::from_iter(jobs_to_clean.into_iter()))
                 .await;
+        }
+
+        if !jobs_delayed_to_clean.is_empty() {
+            let tx_event = tx_event.clone();
+            tokio::spawn(async move {
+                assert!(min_deadline > now_epoch_ts);
+                tokio::time::sleep(Duration::from_secs(min_deadline - now_epoch_ts))
+                    .await;
+                for (job_id, deadline) in jobs_delayed_to_clean {
+                    if tx_event
+                        .send(JobStateCleanupEvent::Delayed {
+                            job_id: job_id.clone(),
+                            deadline,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        error!("Fail to send JobStateCleanupEvent({job_id}, {deadline}) to the channel");
+                    }
+                }
+            });
         }
 
         Ok(())
