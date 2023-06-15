@@ -23,9 +23,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{
-    accept, ExecutionPlan, ExecutionPlanVisitor,
-};
+use datafusion::physical_plan::{accept, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use log::{error, info, warn};
@@ -1551,7 +1549,6 @@ impl ExecutionStageBuilder {
 
         // Now, create the execution stages
         for stage in stages {
-            let partitioning = stage.shuffle_output_partitioning().cloned();
             let stage_id = stage.stage_id();
             let output_links = self.output_links.remove(&stage_id).unwrap_or_default();
 
@@ -1565,7 +1562,6 @@ impl ExecutionStageBuilder {
                     stage_id,
                     0,
                     stage,
-                    partitioning,
                     output_links,
                     HashMap::new(),
                     HashSet::new(),
@@ -1574,7 +1570,6 @@ impl ExecutionStageBuilder {
                 ExecutionStage::UnResolved(UnresolvedStage::new(
                     stage_id,
                     stage,
-                    partitioning,
                     output_links,
                     child_stages,
                 ))
