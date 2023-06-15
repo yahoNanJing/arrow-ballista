@@ -24,7 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{
-    accept, ExecutionPlan, ExecutionPlanVisitor, Partitioning,
+    accept, ExecutionPlan, ExecutionPlanVisitor,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_proto::logical_plan::AsLogicalPlan;
@@ -914,7 +914,6 @@ impl ExecutionGraph {
                     task_id,
                     task_attempt,
                     plan: stage.plan.clone(),
-                    output_partitioning: stage.output_partitioning.clone(),
                 })
             } else {
                 Err(BallistaError::General(format!("Stage {stage_id} is not a running stage")))
@@ -1633,7 +1632,6 @@ pub struct TaskDescription {
     pub task_id: usize,
     pub task_attempt: usize,
     pub plan: Arc<dyn ExecutionPlan>,
-    pub output_partitioning: Option<Partitioning>,
 }
 
 impl Debug for TaskDescription {
@@ -1651,6 +1649,20 @@ impl Debug for TaskDescription {
             self.task_attempt,
             plan
         )
+    }
+}
+
+impl TaskDescription {
+    pub fn get_output_partition_number(&self) -> usize {
+        let shuffle_writer = self
+            .plan
+            .as_any()
+            .downcast_ref::<ShuffleWriterExec>()
+            .unwrap();
+        shuffle_writer
+            .shuffle_output_partitioning()
+            .map(|partitioning| partitioning.partition_count())
+            .unwrap_or_else(|| 1)
     }
 }
 

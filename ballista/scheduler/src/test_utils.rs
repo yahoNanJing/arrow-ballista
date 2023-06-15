@@ -983,10 +983,7 @@ pub fn mock_executor(executor_id: String) -> ExecutorMetadata {
 pub fn mock_completed_task(task: TaskDescription, executor_id: &str) -> TaskStatus {
     let mut partitions: Vec<protobuf::ShuffleWritePartition> = vec![];
 
-    let num_partitions = task
-        .output_partitioning
-        .map(|p| p.partition_count())
-        .unwrap_or(1);
+    let num_partitions = task.get_output_partition_number();
 
     for partition_id in 0..num_partitions {
         partitions.push(protobuf::ShuffleWritePartition {
@@ -1024,10 +1021,7 @@ pub fn mock_completed_task(task: TaskDescription, executor_id: &str) -> TaskStat
 pub fn mock_failed_task(task: TaskDescription, failed_task: FailedTask) -> TaskStatus {
     let mut partitions: Vec<protobuf::ShuffleWritePartition> = vec![];
 
-    let num_partitions = task
-        .output_partitioning
-        .map(|p| p.partition_count())
-        .unwrap_or(1);
+    let num_partitions = task.get_output_partition_number();
 
     for partition_id in 0..num_partitions {
         partitions.push(protobuf::ShuffleWritePartition {
