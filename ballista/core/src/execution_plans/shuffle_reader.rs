@@ -58,6 +58,8 @@ use tokio_stream::wrappers::ReceiverStream;
 /// being executed by an executor
 #[derive(Clone)]
 pub struct ShuffleReaderExec {
+    /// The query stage id to read from
+    pub stage_id: usize,
     pub(crate) schema: SchemaRef,
     /// Each partition of a shuffle can read data from multiple locations
     pub partition: Vec<Vec<PartitionLocation>>,
@@ -68,10 +70,12 @@ pub struct ShuffleReaderExec {
 impl ShuffleReaderExec {
     /// Create a new ShuffleReaderExec
     pub fn try_new(
+        stage_id: usize,
         partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
     ) -> Result<Self> {
         Ok(Self {
+            stage_id,
             partition,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -493,13 +497,14 @@ mod tests {
         ]);
 
         let job_id = "test_job_1";
+        let input_stage_id = 2;
         let mut partitions: Vec<PartitionLocation> = vec![];
         for partition_id in 0..10 {
             partitions.push(PartitionLocation {
                 map_partition_id: 0,
                 partition_id: PartitionId {
                     job_id: job_id.to_string(),
-                    stage_id: 2,
+                    stage_id: input_stage_id,
                     partition_id,
                 },
                 executor_meta: ExecutorMetadata {
@@ -514,8 +519,11 @@ mod tests {
             })
         }
 
-        let shuffle_reader_exec =
-            ShuffleReaderExec::try_new(vec![partitions], Arc::new(schema))?;
+        let shuffle_reader_exec = ShuffleReaderExec::try_new(
+            input_stage_id,
+            vec![partitions],
+            Arc::new(schema),
+        )?;
 
         let expected = "ShuffleReaderExec { schema: Schema { fields: [Field { name: \"a\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"b\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"c\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, partition 1: [10 [PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 0 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 1 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 2 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 3 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, PartitionLocation { map_partition_id: 0, partition_id: PartitionId { job_id: \"test_job_1\", stage_id: 2, partition_id: 4 }, executor_meta: ExecutorMetadata { id: \"executor_1\", host: \"executor_1\", port: 7070 }, partition_stats: PartitionStats { num_rows: None, num_batches: None, num_bytes: None }, path: \"test_path\" }, ...]], metrics: ExecutionPlanMetricsSet { inner: Mutex { data: MetricsSet { metrics: [] } } } }";
         assert_eq!(expected, format!("{shuffle_reader_exec:?}"));
@@ -602,13 +610,14 @@ mod tests {
         ]);
 
         let job_id = "test_job_1";
+        let input_stage_id = 2;
         let mut partitions: Vec<PartitionLocation> = vec![];
         for partition_id in 0..4 {
             partitions.push(PartitionLocation {
                 map_partition_id: 0,
                 partition_id: PartitionId {
                     job_id: job_id.to_string(),
-                    stage_id: 2,
+                    stage_id: input_stage_id,
                     partition_id,
                 },
                 executor_meta: ExecutorMetadata {
@@ -623,8 +632,11 @@ mod tests {
             })
         }
 
-        let shuffle_reader_exec =
-            ShuffleReaderExec::try_new(vec![partitions], Arc::new(schema))?;
+        let shuffle_reader_exec = ShuffleReaderExec::try_new(
+            input_stage_id,
+            vec![partitions],
+            Arc::new(schema),
+        )?;
         let mut stream = shuffle_reader_exec.execute(0, task_ctx)?;
         let batches = utils::collect_stream(&mut stream).await;
 
