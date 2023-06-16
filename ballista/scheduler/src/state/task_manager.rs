@@ -295,11 +295,21 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         let mut job_updates: HashMap<String, HashMap<String, Vec<TaskStatus>>> =
             HashMap::new();
         let mut executors = HashMap::new();
+        let mut lost_executors = HashSet::new();
         for (executor_id, task_status) in task_status_vec {
-            if !executors.contains_key(&executor_id) {
-                let executor =
-                    executor_manager.get_executor_metadata(&executor_id).await?;
-                executors.insert(executor_id.clone(), executor);
+            if !executors.contains_key(&executor_id)
+                && !lost_executors.contains(&executor_id)
+            {
+                match executor_manager.get_executor_metadata(&executor_id).await {
+                    Ok(executor) => {
+                        executors.insert(executor_id.clone(), executor);
+                    }
+                    Err(e) => {
+                        lost_executors.insert(executor_id);
+                        warn!("{}", e);
+                        continue;
+                    }
+                }
             }
             for status in task_status {
                 trace!("Task Update\n{:?} from executor {}", status, executor_id);
@@ -336,6 +346,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
                 // TODO Deal with curator changed case
                 error!("Fail to find job {} in the active cache and it may not be curated by this scheduler", job_id);
             };
+        }
+
+        // If fail to find executor, send an ExecutorLost event
+        for lost_executor in lost_executors {
+            events.push(QueryStageSchedulerEvent::ExecutorLost(lost_executor, None));
         }
 
         Ok(events)
