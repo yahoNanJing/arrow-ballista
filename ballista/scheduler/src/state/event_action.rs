@@ -449,25 +449,30 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             }
         }
 
-        match self.state.update_task_statuses(events).await {
-            Ok(mut stage_events) => {
-                if self.state.config.is_push_staged_scheduling() {
-                    stage_events.push(QueryStageSchedulerEvent::ReviveOffers);
-                }
-                for stage_event in stage_events {
-                    if stage_event_sender
-                        .post_event(stage_event.clone())
-                        .await
-                        .is_err()
-                    {
-                        error!("Fail to send back event {stage_event:?} to the channel");
+        let state = self.state.clone();
+        tokio::spawn(async move {
+            match state.update_task_statuses(events).await {
+                Ok(mut stage_events) => {
+                    if state.config.is_push_staged_scheduling() {
+                        stage_events.push(QueryStageSchedulerEvent::ReviveOffers);
+                    }
+                    for stage_event in stage_events {
+                        if stage_event_sender
+                            .post_event(stage_event.clone())
+                            .await
+                            .is_err()
+                        {
+                            error!(
+                                "Fail to send back event {stage_event:?} to the channel"
+                            );
+                        }
                     }
                 }
+                Err(e) => {
+                    error!("Fail to batch update statuses: {}", e)
+                }
             }
-            Err(e) => {
-                error!("Fail to batch update statuses: {}", e)
-            }
-        }
+        });
 
         Ok(())
     }
