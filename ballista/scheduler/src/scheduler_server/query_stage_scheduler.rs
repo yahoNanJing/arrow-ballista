@@ -284,7 +284,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 plan,
                 queued_at,
             } => {
-                info!("Job {} queued with name {:?}", job_id, job_name);
+                info!("Job {} queued with name {}", job_id, job_name);
 
                 if let Err(e) = self
                     .state
