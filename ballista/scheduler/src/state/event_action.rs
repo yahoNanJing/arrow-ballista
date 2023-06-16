@@ -106,7 +106,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .as_secs();
         let mut jobs_to_clean = HashSet::new();
         let mut jobs_delayed_to_clean = HashMap::new();
-        let mut min_deadline = now_epoch_ts + self.sleep_ts;
+        let mut min_deadline = 0;
         for event in events {
             match event {
                 JobDataCleanupEvent::Immediate { job_id } => {
@@ -116,7 +116,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     if deadline <= now_epoch_ts {
                         jobs_to_clean.insert(job_id);
                     } else {
-                        if deadline < min_deadline {
+                        if min_deadline == 0 || deadline < min_deadline {
                             min_deadline = deadline;
                         }
                         let old_deadline = jobs_delayed_to_clean
@@ -143,6 +143,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
         if !jobs_delayed_to_clean.is_empty() {
             let tx_event = tx_event.clone();
+            // At least sleep [`sleep_ts`] seconds
+            if min_deadline < now_epoch_ts + self.sleep_ts {
+                min_deadline = now_epoch_ts + self.sleep_ts;
+            }
             tokio::spawn(async move {
                 assert!(min_deadline > now_epoch_ts);
                 tokio::time::sleep(Duration::from_secs(min_deadline - now_epoch_ts))
@@ -243,7 +247,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .as_secs();
         let mut jobs_to_clean = HashSet::new();
         let mut jobs_delayed_to_clean = HashMap::new();
-        let mut min_deadline = now_epoch_ts + self.sleep_ts;
+        let mut min_deadline = 0;
         for event in events {
             match event {
                 JobStateCleanupEvent::Immediate { job_id } => {
@@ -253,7 +257,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     if deadline <= now_epoch_ts {
                         jobs_to_clean.insert(job_id);
                     } else {
-                        if deadline < min_deadline {
+                        if min_deadline == 0 || deadline < min_deadline {
                             min_deadline = deadline;
                         }
                         let old_deadline = jobs_delayed_to_clean
@@ -277,8 +281,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
         if !jobs_delayed_to_clean.is_empty() {
             let tx_event = tx_event.clone();
+            // At least sleep [`sleep_ts`] seconds
+            if min_deadline < now_epoch_ts + self.sleep_ts {
+                min_deadline = now_epoch_ts + self.sleep_ts;
+            }
             tokio::spawn(async move {
-                assert!(min_deadline > now_epoch_ts);
                 tokio::time::sleep(Duration::from_secs(min_deadline - now_epoch_ts))
                     .await;
                 for (job_id, deadline) in jobs_delayed_to_clean {
