@@ -20,6 +20,7 @@ use std::fmt::{Debug, Formatter};
 use datafusion::logical_expr::LogicalPlan;
 
 use crate::state::execution_graph::RunningTaskInfo;
+use ballista_core::event_loop::EventSender;
 use ballista_core::serde::protobuf::TaskStatus;
 use datafusion::prelude::SessionContext;
 use std::sync::Arc;
@@ -183,5 +184,24 @@ impl Debug for JobStateCleanupEvent {
                 write!(f, "JobStateCleanupEvent::Delayed({job_id}, {deadline}).")
             }
         }
+    }
+}
+
+/// Events for task status update
+#[derive(Clone)]
+pub struct TaskStatusUpdateEvent {
+    pub executor_id: String,
+    pub tasks_status: Vec<TaskStatus>,
+    pub stage_event_sender: EventSender<QueryStageSchedulerEvent>,
+}
+
+impl Debug for TaskStatusUpdateEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TaskStatusUpdateEvent: {{ ")?;
+        write!(f, "executor_id: {}", self.executor_id)?;
+        write!(f, " ,tasks_status: {:?}", self.tasks_status)?;
+        write!(f, " }}")?;
+
+        Ok(())
     }
 }

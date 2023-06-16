@@ -283,45 +283,59 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         }
     }
 
+    /// @Param [`task_status_vec`], a vector of (ExecutorId, Vec<TaskStatus> from that executor)
+    ///
     /// Update given task statuses in the respective job and return a tuple containing:
     /// 1. A list of QueryStageSchedulerEvent to publish.
-    /// 2. A list of reservations that can now be offered.
     pub(crate) async fn update_task_statuses(
         &self,
-        executor: &ExecutorMetadata,
-        task_status: Vec<TaskStatus>,
+        task_status_vec: Vec<(String, Vec<TaskStatus>)>,
+        executor_manager: &ExecutorManager,
     ) -> Result<Vec<QueryStageSchedulerEvent>> {
-        let mut job_updates: HashMap<String, Vec<TaskStatus>> = HashMap::new();
-        for status in task_status {
-            trace!("Task Update\n{:?}", status);
-            let job_id = status.job_id.clone();
-            let job_task_statuses = job_updates.entry(job_id).or_insert_with(Vec::new);
-            job_task_statuses.push(status);
+        let mut job_updates: HashMap<String, HashMap<String, Vec<TaskStatus>>> =
+            HashMap::new();
+        let mut executors = HashMap::new();
+        for (executor_id, task_status) in task_status_vec {
+            if !executors.contains_key(&executor_id) {
+                let executor =
+                    executor_manager.get_executor_metadata(&executor_id).await?;
+                executors.insert(executor_id.clone(), executor);
+            }
+            for status in task_status {
+                trace!("Task Update\n{:?} from executor {}", status, executor_id);
+                let job_id = status.job_id.clone();
+                let job_task_statuses =
+                    job_updates.entry(job_id).or_insert_with(HashMap::new);
+                let job_executor_task_statuses = job_task_statuses
+                    .entry(executor_id.clone())
+                    .or_insert_with(Vec::new);
+                job_executor_task_statuses.push(status);
+            }
         }
 
         let mut events: Vec<QueryStageSchedulerEvent> = vec![];
-        for (job_id, statuses) in job_updates {
-            let num_tasks = statuses.len();
-            debug!("Updating {} tasks in job {}", num_tasks, job_id);
-
-            // let graph = self.get_active_execution_graph(&job_id).await;
-            let job_events = if let Some(cached) =
-                self.get_active_execution_graph(&job_id)
-            {
+        for (job_id, job_task_statuses) in job_updates {
+            if let Some(cached) = self.get_active_execution_graph(&job_id) {
                 let mut graph = cached.write().await;
-                graph.update_task_status(
-                    executor,
-                    statuses,
-                    TASK_MAX_FAILURES,
-                    STAGE_MAX_FAILURES,
-                )?
+                for (executor_id, statuses) in job_task_statuses {
+                    let executor = executors.get(&executor_id).unwrap();
+                    let num_tasks = statuses.len();
+                    debug!(
+                        "Updating {} tasks from {} in job {}",
+                        num_tasks, executor_id, job_id
+                    );
+                    let job_events = graph.update_task_status(
+                        executor,
+                        statuses,
+                        TASK_MAX_FAILURES,
+                        STAGE_MAX_FAILURES,
+                    )?;
+                    events.extend(job_events);
+                }
             } else {
                 // TODO Deal with curator changed case
                 error!("Fail to find job {} in the active cache and it may not be curated by this scheduler", job_id);
-                vec![]
             };
-
-            events.extend(job_events);
         }
 
         Ok(events)

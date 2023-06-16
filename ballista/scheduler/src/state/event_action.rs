@@ -30,7 +30,10 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::event_loop;
 
-use crate::scheduler_server::event::{JobDataCleanupEvent, JobStateCleanupEvent};
+use crate::scheduler_server::event::{
+    JobDataCleanupEvent, JobStateCleanupEvent, QueryStageSchedulerEvent,
+    TaskStatusUpdateEvent,
+};
 use crate::state::SchedulerState;
 
 /// EventAction for cleaning up job shuffle data on executors
@@ -319,7 +322,7 @@ pub struct OfferReviver<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> OfferReviver<T, U> {
     pub fn new(state: Arc<SchedulerState<T, U>>) -> Self {
-        Self::new_with_batch_size(state, 100)
+        Self::new_with_batch_size(state, 256)
     }
 
     pub fn new_with_batch_size(
@@ -379,5 +382,97 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> event_loop::Event
 
     fn on_error(&self, error: BallistaError) {
         error!("Error received by OfferReviver: {:?}", error);
+    }
+}
+
+/// EventAction for task status update
+pub struct TaskStatusUpdater<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    state: Arc<SchedulerState<T, U>>,
+    batch_size: usize,
+}
+
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskStatusUpdater<T, U> {
+    pub fn new(state: Arc<SchedulerState<T, U>>) -> Self {
+        Self::new_with_batch_size(state, 1024)
+    }
+
+    pub fn new_with_batch_size(
+        state: Arc<SchedulerState<T, U>>,
+        batch_size: usize,
+    ) -> Self {
+        Self { state, batch_size }
+    }
+}
+
+#[async_trait]
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
+    event_loop::EventAction<TaskStatusUpdateEvent> for TaskStatusUpdater<T, U>
+{
+    fn on_start(&self) {
+        info!("Starting TaskStatusUpdater");
+    }
+
+    fn on_stop(&self) {
+        info!("Stopping TaskStatusUpdater");
+    }
+
+    async fn on_receive(
+        &self,
+        event: TaskStatusUpdateEvent,
+        _tx_event: &Sender<TaskStatusUpdateEvent>,
+        rx_event: &mut Receiver<TaskStatusUpdateEvent>,
+    ) -> Result<()> {
+        let stage_event_sender = event.stage_event_sender;
+        let mut events = vec![(event.executor_id, event.tasks_status)];
+        // Try to fetch events by non-blocking mode as many as possible
+        loop {
+            match rx_event.try_recv() {
+                Ok(event) => {
+                    events.push((event.executor_id, event.tasks_status));
+                }
+                Err(TryRecvError::Empty) => {
+                    info!("{} task status update events fetched", events.len());
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    info!("Channel is closed and will exit the loop");
+                    return Ok(());
+                }
+            }
+
+            if events.len() >= self.batch_size {
+                info!(
+                    "{} task status update events as a full batch drained",
+                    events.len()
+                );
+                break;
+            }
+        }
+
+        match self.state.update_task_statuses(events).await {
+            Ok(mut stage_events) => {
+                if self.state.config.is_push_staged_scheduling() {
+                    stage_events.push(QueryStageSchedulerEvent::ReviveOffers);
+                }
+                for stage_event in stage_events {
+                    if stage_event_sender
+                        .post_event(stage_event.clone())
+                        .await
+                        .is_err()
+                    {
+                        error!("Fail to send back event {stage_event:?} to the channel");
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Fail to batch update statuses: {}", e)
+            }
+        }
+
+        Ok(())
+    }
+
+    fn on_error(&self, error: BallistaError) {
+        error!("Error received by TaskStatusUpdater: {:?}", error);
     }
 }

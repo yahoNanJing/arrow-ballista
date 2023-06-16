@@ -507,7 +507,10 @@ mod test {
 
                 scheduler
                     .state
-                    .update_task_statuses("executor-1", vec![task_status])
+                    .update_task_statuses(vec![(
+                        "executor-1".to_string(),
+                        vec![task_status],
+                    )])
                     .await?;
             } else {
                 break;

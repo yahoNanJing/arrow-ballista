@@ -26,6 +26,7 @@ use ballista_core::event_loop::{EventAction, EventLoop, EventSender};
 
 use crate::metrics::SchedulerMetricsCollector;
 use crate::scheduler_server::timestamp_millis;
+use ballista_core::serde::protobuf::TaskStatus;
 use datafusion_proto::logical_plan::AsLogicalPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use tokio::sync::mpsc;
@@ -33,8 +34,11 @@ use tokio::time::Instant;
 
 use crate::scheduler_server::event::{
     JobDataCleanupEvent, JobStateCleanupEvent, QueryStageSchedulerEvent,
+    TaskStatusUpdateEvent,
 };
-use crate::state::event_action::{JobDataCleaner, JobStateCleaner, OfferReviver};
+use crate::state::event_action::{
+    JobDataCleaner, JobStateCleaner, OfferReviver, TaskStatusUpdater,
+};
 
 use crate::state::SchedulerState;
 
@@ -46,6 +50,7 @@ pub(crate) struct QueryStageScheduler<
     job_data_cleaner_event_loop: EventLoop<JobDataCleanupEvent>,
     job_state_cleaner_event_loop: EventLoop<JobStateCleanupEvent>,
     offer_reviver_event_loop: EventLoop<()>,
+    task_status_updater_event_loop: EventLoop<TaskStatusUpdateEvent>,
     metrics_collector: Arc<dyn SchedulerMetricsCollector>,
     event_expected_processing_duration: u64,
 }
@@ -86,11 +91,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
             .start()
             .expect("Fail to start the event loop for revive offers");
 
+        let task_status_updater = TaskStatusUpdater::new(state.clone());
+        let mut task_status_updater_event_loop = EventLoop::new(
+            "TaskStatusUpdater".to_string(),
+            state.config.event_loop_buffer_size as usize,
+            Arc::new(task_status_updater),
+        );
+        task_status_updater_event_loop
+            .start()
+            .expect("Fail to start the event loop for task status update");
+
         Self {
             state,
             job_data_cleaner_event_loop,
             job_state_cleaner_event_loop,
             offer_reviver_event_loop,
+            task_status_updater_event_loop,
             metrics_collector,
             event_expected_processing_duration,
         }
@@ -191,6 +207,48 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
             }
         } else {
             error!("Fail to get event sender for OfferReviver");
+        }
+    }
+
+    async fn send_task_status_updater_event(
+        &self,
+        executor_id: String,
+        tasks_status: Vec<TaskStatus>,
+        stage_event_sender: EventSender<QueryStageSchedulerEvent>,
+    ) {
+        debug!(
+            "processing task status updates from {executor_id}: {:?}",
+            tasks_status
+        );
+
+        let num_status = tasks_status.len();
+        if self.state.config.is_push_staged_scheduling() {
+            if let Err(e) = self
+                .state
+                .executor_manager
+                .unbind_tasks(vec![(executor_id.clone(), num_status as u32)])
+                .await
+            {
+                error!(
+                    "Fail to unbind {} slots for executor{}: {}",
+                    num_status, executor_id, e
+                );
+            }
+        }
+
+        if let Ok(sender) = self.task_status_updater_event_loop.get_sender() {
+            if let Err(e) = sender
+                .post_event(TaskStatusUpdateEvent {
+                    executor_id,
+                    tasks_status,
+                    stage_event_sender,
+                })
+                .await
+            {
+                error!("Fail to send task status update event due to {:?}", e);
+            }
+        } else {
+            error!("Fail to get event sender for TaskStatusUpdater");
         }
     }
 }
@@ -385,39 +443,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 self.clean_up_failed_job(job_id).await;
             }
             QueryStageSchedulerEvent::TaskUpdating(executor_id, tasks_status) => {
-                debug!(
-                    "processing task status updates from {executor_id}: {:?}",
-                    tasks_status
-                );
-
-                let num_status = tasks_status.len();
-                if self.state.config.is_push_staged_scheduling() {
-                    self.state
-                        .executor_manager
-                        .unbind_tasks(vec![(executor_id.clone(), num_status as u32)])
-                        .await?;
-                }
-                match self
-                    .state
-                    .update_task_statuses(&executor_id, tasks_status)
+                self.send_task_status_updater_event(executor_id, tasks_status, tx_event)
                     .await
-                {
-                    Ok(stage_events) => {
-                        for stage_event in stage_events {
-                            tx_event.post_event(stage_event).await?;
-                        }
-                        if self.state.config.is_push_staged_scheduling() {
-                            self.send_revive_offers_event().await;
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            "Failed to update {} task statuses for Executor {}: {:?}",
-                            num_status, executor_id, e
-                        );
-                        // TODO error handling
-                    }
-                }
             }
             QueryStageSchedulerEvent::ReviveOffers => {
                 self.send_revive_offers_event().await;

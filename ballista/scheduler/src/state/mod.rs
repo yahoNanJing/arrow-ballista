@@ -330,16 +330,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
 
     pub(crate) async fn update_task_statuses(
         &self,
-        executor_id: &str,
-        tasks_status: Vec<TaskStatus>,
+        task_status_vec: Vec<(String, Vec<TaskStatus>)>,
     ) -> Result<Vec<QueryStageSchedulerEvent>> {
-        let executor = self
-            .executor_manager
-            .get_executor_metadata(executor_id)
-            .await?;
-
         self.task_manager
-            .update_task_statuses(&executor, tasks_status)
+            .update_task_statuses(task_status_vec, &self.executor_manager)
             .await
     }
 
