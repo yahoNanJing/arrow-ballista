@@ -96,8 +96,8 @@ impl TaskLauncher for DefaultTaskLauncher {
                 })
                 .collect();
             info!(
-                "Launching multi task on executor {:?} for {:?}",
-                executor.id, tasks_ids
+                "Launching multi task on executor {}:{} for {:?}",
+                executor.host, executor.grpc_port, tasks_ids
             );
         }
         executor_manager
