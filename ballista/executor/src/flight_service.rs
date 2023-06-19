@@ -36,7 +36,7 @@ use datafusion::arrow::{
     error::ArrowError, ipc::reader::FileReader, record_batch::RecordBatch,
 };
 use futures::{Stream, StreamExt};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::io::{Read, Seek};
 use tokio::sync::mpsc::channel;
 use tokio::{
@@ -93,9 +93,10 @@ impl FlightService for BallistaFlightService {
                 debug!("FetchPartition reading {}", path);
                 let file = File::open(path)
                     .map_err(|e| {
-                        BallistaError::General(format!(
-                            "Failed to open partition file at {path}: {e:?}"
-                        ))
+                        let msg =
+                            format!("Failed to open partition file at {path}: {e:?}");
+                        error!("{}", msg);
+                        BallistaError::General(msg)
                     })
                     .map_err(|e| from_ballista_err(&e))?;
                 let reader =
