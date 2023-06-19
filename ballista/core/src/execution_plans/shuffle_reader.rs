@@ -402,10 +402,9 @@ async fn fetch_partition_remote(
     let port = metadata.port;
 
     //Get cache connection from executor global cache
-    let addr: Arc<str> = Arc::from(format!("http://{}:{}", host, port));
     let mut ballista_client =
         SHUFFLE_READER_POOL
-            .connect(addr.clone())
+            .get(metadata)
             .await
             .map_err(|error| match error {
                 // map grpc connection error to partition fetch error.
@@ -424,12 +423,10 @@ async fn fetch_partition_remote(
     // If fetch error invalidate cache connection
     if res.is_err() {
         warn!(
-            "Fetching partition fail try to invalidate connection: {}",
-            addr.clone()
+            "Fetch partition for {}/{} failed. The cache connection will be invalidated.",
+            host, port
         );
-        SHUFFLE_READER_POOL
-            .invalidate_connection(addr.clone())
-            .await;
+        SHUFFLE_READER_POOL.remove(metadata).await;
     }
     res
 }

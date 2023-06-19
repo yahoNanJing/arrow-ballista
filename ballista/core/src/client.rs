@@ -62,20 +62,14 @@ impl BallistaClient {
     /// host and port
     pub async fn try_new(host: &str, port: u16) -> Result<Self> {
         let addr = format!("http://{host}:{port}");
-        Self::try_new_with_addr(addr).await
-    }
-
-    /// Create a new BallistaClient to connect to the executor listening with http addr
-    pub async fn try_new_with_addr(addr: String) -> Result<Self> {
         debug!("BallistaClient connecting to {}", addr);
         let connection =
             create_grpc_client_connection(addr.clone())
                 .await
                 .map_err(|e| {
                     BallistaError::GrpcConnectionError(format!(
-                        "Error connecting to Ballista scheduler or executor at {}: {:?}",
-                        addr, e
-                    ))
+                    "Error connecting to Ballista scheduler or executor at {addr}: {e:?}"
+                ))
                 })?;
         let flight_client = FlightServiceClient::new(connection);
         debug!("BallistaClient connected OK");
