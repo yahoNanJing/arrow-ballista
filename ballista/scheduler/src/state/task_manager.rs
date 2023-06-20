@@ -297,9 +297,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskManager<T, U>
         let mut executors = HashMap::new();
         let mut lost_executors = HashSet::new();
         for (executor_id, task_status) in task_status_vec {
-            if !executors.contains_key(&executor_id)
-                && !lost_executors.contains(&executor_id)
-            {
+            if lost_executors.contains(&executor_id) {
+                continue;
+            }
+            if !executors.contains_key(&executor_id) {
                 match executor_manager.get_executor_metadata(&executor_id).await {
                     Ok(executor) => {
                         executors.insert(executor_id.clone(), executor);
