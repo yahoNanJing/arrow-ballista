@@ -115,142 +115,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
     pub(crate) fn metrics_collector(&self) -> &dyn SchedulerMetricsCollector {
         self.metrics_collector.as_ref()
     }
-
-    /// For cleaning up a successful job,
-    /// - clean the shuffle data on executors delayed
-    /// - clean the state on schedulers delayed
-    async fn clean_up_successful_job(&self, job_id: String) {
-        if self
-            .state
-            .config
-            .finished_job_data_clean_up_interval_seconds
-            > 0
-        {
-            self.send_job_data_cleanup_event(job_id.clone(), true).await;
-        }
-        if self
-            .state
-            .config
-            .finished_job_state_clean_up_interval_seconds
-            > 0
-        {
-            self.send_job_state_cleanup_event(job_id, true).await;
-        }
-    }
-
-    /// For cleaning up a failed job,
-    /// - clean the shuffle data on executors immediately
-    /// - clean the state on schedulers delayed
-    async fn clean_up_failed_job(&self, job_id: String) {
-        self.send_job_data_cleanup_event(job_id.clone(), false)
-            .await;
-        if self
-            .state
-            .config
-            .finished_job_state_clean_up_interval_seconds
-            > 0
-        {
-            self.send_job_state_cleanup_event(job_id, true).await;
-        }
-    }
-
-    async fn send_job_data_cleanup_event(&self, job_id: String, delayed: bool) {
-        if let Ok(sender) = self.job_data_cleaner_event_loop.get_sender() {
-            let event = if delayed {
-                let deadline = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs()
-                    + self
-                        .state
-                        .config
-                        .finished_job_data_clean_up_interval_seconds;
-                JobDataCleanupEvent::Delayed { job_id, deadline }
-            } else {
-                JobDataCleanupEvent::Immediate { job_id }
-            };
-            if let Err(e) = sender.post_event(event.clone()).await {
-                warn!("Fail to send event {:?} due to {:?}", event, e);
-            }
-        } else {
-            warn!("Fail to get event sender for JobDataCleanup");
-        }
-    }
-
-    async fn send_job_state_cleanup_event(&self, job_id: String, delayed: bool) {
-        if let Ok(sender) = self.job_state_cleaner_event_loop.get_sender() {
-            let event = if delayed {
-                let deadline = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs()
-                    + self
-                        .state
-                        .config
-                        .finished_job_state_clean_up_interval_seconds;
-                JobStateCleanupEvent::Delayed { job_id, deadline }
-            } else {
-                JobStateCleanupEvent::Immediate { job_id }
-            };
-            if let Err(e) = sender.post_event(event.clone()).await {
-                warn!("Fail to send event {:?} due to {:?}", event, e);
-            }
-        } else {
-            warn!("Fail to get event sender for JobStateCleanup");
-        }
-    }
-
-    async fn send_revive_offers_event(&self) {
-        if let Ok(sender) = self.offer_reviver_event_loop.get_sender() {
-            if let Err(e) = sender.post_event(()).await {
-                error!("Fail to send revive offers event due to {:?}", e);
-            }
-        } else {
-            error!("Fail to get event sender for OfferReviver");
-        }
-    }
-
-    async fn send_task_status_updater_event(
-        &self,
-        executor_id: String,
-        tasks_status: Vec<TaskStatus>,
-        stage_event_sender: EventSender<QueryStageSchedulerEvent>,
-    ) {
-        debug!(
-            "processing task status updates from {executor_id}: {:?}",
-            tasks_status
-        );
-
-        let num_status = tasks_status.len();
-        if self.state.config.is_push_staged_scheduling() {
-            if let Err(e) = self
-                .state
-                .executor_manager
-                .unbind_tasks(vec![(executor_id.clone(), num_status as u32)])
-                .await
-            {
-                error!(
-                    "Fail to unbind {} slots for executor{}: {}",
-                    num_status, executor_id, e
-                );
-            }
-        }
-
-        if let Ok(sender) = self.task_status_updater_event_loop.get_sender() {
-            if let Err(e) = sender
-                .post_event(TaskStatusUpdateEvent {
-                    executor_id,
-                    tasks_status,
-                    stage_event_sender,
-                })
-                .await
-            {
-                error!("Fail to send task status update event due to {:?}", e);
-            }
-        } else {
-            error!("Fail to get event sender for TaskStatusUpdater");
-        }
-    }
 }
 
 #[async_trait]
@@ -333,7 +197,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 info!("Job {} submitted", job_id);
 
                 if self.state.config.is_push_staged_scheduling() {
-                    self.send_revive_offers_event().await;
+                    send_revive_offers_event(self.offer_reviver_event_loop.get_sender())
+                        .await;
                 }
             }
             QueryStageSchedulerEvent::JobPlanningFailed {
@@ -345,18 +210,20 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 self.metrics_collector
                     .record_failed(&job_id, queued_at, failed_at);
 
-                error!("Job {} failed: {}", job_id, fail_message);
-                if let Err(e) = self
-                    .state
-                    .task_manager
-                    .fail_unscheduled_job(&job_id, fail_message)
-                    .await
-                {
-                    error!(
-                        "Fail to invoke fail_unscheduled_job for job {} due to {:?}",
-                        job_id, e
-                    );
-                }
+                let state = self.state.clone();
+                tokio::spawn(async move {
+                    error!("Job {} failed: {}", job_id, fail_message);
+                    if let Err(e) = state
+                        .task_manager
+                        .fail_unscheduled_job(&job_id, fail_message)
+                        .await
+                    {
+                        error!(
+                            "Fail to invoke fail_unscheduled_job for job {} due to {:?}",
+                            job_id, e
+                        );
+                    }
+                });
             }
             QueryStageSchedulerEvent::JobFinished {
                 job_id,
@@ -366,15 +233,28 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 self.metrics_collector
                     .record_completed(&job_id, queued_at, completed_at);
 
-                info!("Job {} success", job_id);
-                if let Err(e) = self.state.task_manager.succeed_job(&job_id).await {
-                    error!(
-                        "Fail to invoke succeed_job for job {} due to {:?}",
-                        job_id, e
-                    );
-                }
+                let state = self.state.clone();
+                let job_data_cleanup_sender =
+                    self.job_data_cleaner_event_loop.get_sender();
+                let job_state_cleanup_sender =
+                    self.job_state_cleaner_event_loop.get_sender();
+                tokio::spawn(async move {
+                    info!("Job {} success", job_id);
+                    if let Err(e) = state.task_manager.succeed_job(&job_id).await {
+                        error!(
+                            "Fail to invoke succeed_job for job {} due to {:?}",
+                            job_id, e
+                        );
+                    }
 
-                self.clean_up_successful_job(job_id).await;
+                    clean_up_successful_job(
+                        state,
+                        job_data_cleanup_sender,
+                        job_state_cleanup_sender,
+                        job_id,
+                    )
+                    .await;
+                });
             }
             QueryStageSchedulerEvent::JobRunningFailed {
                 job_id,
@@ -385,88 +265,141 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 self.metrics_collector
                     .record_failed(&job_id, queued_at, failed_at);
 
-                error!("Job {} running failed due to {}", job_id, fail_message);
-                match self
-                    .state
-                    .task_manager
-                    .abort_job(&job_id, fail_message)
-                    .await
-                {
-                    Ok((running_tasks, _pending_tasks)) => {
-                        if !running_tasks.is_empty() {
-                            tx_event
-                                .post_event(QueryStageSchedulerEvent::CancelTasks(
-                                    running_tasks,
-                                ))
-                                .await?;
+                let state = self.state.clone();
+                let job_data_cleanup_sender =
+                    self.job_data_cleaner_event_loop.get_sender();
+                let job_state_cleanup_sender =
+                    self.job_state_cleaner_event_loop.get_sender();
+                tokio::spawn(async move {
+                    error!("Job {} running failed due to {}", job_id, fail_message);
+                    match state.task_manager.abort_job(&job_id, fail_message).await {
+                        Ok((running_tasks, _pending_tasks)) => {
+                            if !running_tasks.is_empty() {
+                                if let Err(e) = tx_event
+                                    .post_event(QueryStageSchedulerEvent::CancelTasks(
+                                        running_tasks,
+                                    ))
+                                    .await
+                                {
+                                    error!("Fail to send CancelTasks event for job {} due to {:?}", job_id, e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Fail to invoke abort_job for job {} due to {:?}",
+                                job_id, e
+                            );
                         }
                     }
-                    Err(e) => {
+
+                    clean_up_failed_job(
+                        state,
+                        job_data_cleanup_sender,
+                        job_state_cleanup_sender,
+                        job_id,
+                    )
+                    .await;
+                });
+            }
+            QueryStageSchedulerEvent::JobUpdated(job_id) => {
+                let state = self.state.clone();
+                tokio::spawn(async move {
+                    info!("Job {} Updated", job_id);
+                    if let Err(e) = state.task_manager.update_job(&job_id).await {
                         error!(
-                            "Fail to invoke abort_job for job {} due to {:?}",
+                            "Fail to invoke update_job for job {} due to {:?}",
                             job_id, e
                         );
                     }
-                }
-
-                self.clean_up_failed_job(job_id).await;
-            }
-            QueryStageSchedulerEvent::JobUpdated(job_id) => {
-                info!("Job {} Updated", job_id);
-                if let Err(e) = self.state.task_manager.update_job(&job_id).await {
-                    error!(
-                        "Fail to invoke update_job for job {} due to {:?}",
-                        job_id, e
-                    );
-                }
+                });
             }
             QueryStageSchedulerEvent::JobCancel(job_id) => {
                 self.metrics_collector.record_cancelled(&job_id);
 
-                info!("Job {} Cancelled", job_id);
-                match self.state.task_manager.cancel_job(&job_id).await {
-                    Ok((running_tasks, _pending_tasks)) => {
-                        tx_event
-                            .post_event(QueryStageSchedulerEvent::CancelTasks(
-                                running_tasks,
-                            ))
-                            .await?;
+                let state = self.state.clone();
+                let job_data_cleanup_sender =
+                    self.job_data_cleaner_event_loop.get_sender();
+                let job_state_cleanup_sender =
+                    self.job_state_cleaner_event_loop.get_sender();
+                tokio::spawn(async move {
+                    info!("Job {} Cancelled", job_id);
+                    match state.task_manager.cancel_job(&job_id).await {
+                        Ok((running_tasks, _pending_tasks)) => {
+                            if let Err(e) = tx_event
+                                .post_event(QueryStageSchedulerEvent::CancelTasks(
+                                    running_tasks,
+                                ))
+                                .await
+                            {
+                                error!("Fail to send CancelTasks event for job {} due to {:?}", job_id, e);
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Fail to invoke cancel_job for job {} due to {:?}",
+                                job_id, e
+                            );
+                        }
                     }
-                    Err(e) => {
-                        error!(
-                            "Fail to invoke cancel_job for job {} due to {:?}",
-                            job_id, e
-                        );
-                    }
-                }
 
-                self.clean_up_failed_job(job_id).await;
+                    clean_up_failed_job(
+                        state,
+                        job_data_cleanup_sender,
+                        job_state_cleanup_sender,
+                        job_id,
+                    )
+                    .await;
+                });
             }
             QueryStageSchedulerEvent::TaskUpdating(executor_id, tasks_status) => {
-                self.send_task_status_updater_event(executor_id, tasks_status, tx_event)
+                let state = self.state.clone();
+                let sender = self.task_status_updater_event_loop.get_sender();
+                tokio::spawn(async move {
+                    send_task_status_updater_event(
+                        state,
+                        sender,
+                        executor_id,
+                        tasks_status,
+                        tx_event,
+                    )
                     .await
+                });
             }
             QueryStageSchedulerEvent::ReviveOffers => {
-                self.send_revive_offers_event().await;
+                send_revive_offers_event(self.offer_reviver_event_loop.get_sender())
+                    .await;
             }
             QueryStageSchedulerEvent::ExecutorLost(executor_id, reason) => {
-                self.state.remove_executor(&executor_id, reason).await;
-                if self.state.config.is_push_staged_scheduling() {
-                    self.send_revive_offers_event().await;
-                }
+                let sender = if self.state.config.is_push_staged_scheduling() {
+                    Some(self.offer_reviver_event_loop.get_sender())
+                } else {
+                    None
+                };
+                let state = self.state.clone();
+                tokio::spawn(async move {
+                    state.remove_executor(&executor_id, reason).await;
+                    if let Some(sender) = sender {
+                        send_revive_offers_event(sender).await;
+                    }
+                });
             }
             QueryStageSchedulerEvent::CancelTasks(tasks) => {
-                if let Err(e) = self
-                    .state
-                    .executor_manager
-                    .cancel_running_tasks(tasks)
-                    .await
-                {
-                    warn!("Fail to cancel running tasks due to {:?}", e);
-                }
+                let state = self.state.clone();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        state.executor_manager.cancel_running_tasks(tasks).await
+                    {
+                        warn!("Fail to cancel running tasks due to {:?}", e);
+                    }
+                });
             }
             QueryStageSchedulerEvent::JobDataClean(job_id) => {
-                self.send_job_data_cleanup_event(job_id, false).await;
+                let state = self.state.clone();
+                let sender = self.job_data_cleaner_event_loop.get_sender();
+                tokio::spawn(async move {
+                    send_job_data_cleanup_event(state, sender, job_id, false).await;
+                });
             }
         }
         if let Some((start, ec)) = time_recorder {
@@ -486,5 +419,163 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
     fn on_error(&self, error: BallistaError) {
         error!("Error received by QueryStageScheduler: {:?}", error);
+    }
+}
+
+/// For cleaning up a successful job,
+/// - clean the shuffle data on executors delayed
+/// - clean the state on schedulers delayed
+async fn clean_up_successful_job<
+    T: 'static + AsLogicalPlan,
+    U: 'static + AsExecutionPlan,
+>(
+    state: Arc<SchedulerState<T, U>>,
+    job_data_cleanup_sender: Result<EventSender<JobDataCleanupEvent>>,
+    job_state_cleanup_sender: Result<EventSender<JobStateCleanupEvent>>,
+    job_id: String,
+) {
+    if state.config.finished_job_data_clean_up_interval_seconds > 0 {
+        send_job_data_cleanup_event(
+            state.clone(),
+            job_data_cleanup_sender,
+            job_id.clone(),
+            true,
+        )
+        .await;
+    }
+    if state.config.finished_job_state_clean_up_interval_seconds > 0 {
+        send_job_state_cleanup_event(state, job_state_cleanup_sender, job_id, true).await;
+    }
+}
+
+/// For cleaning up a failed job,
+/// - clean the shuffle data on executors immediately
+/// - clean the state on schedulers delayed
+async fn clean_up_failed_job<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
+    state: Arc<SchedulerState<T, U>>,
+    job_data_cleanup_sender: Result<EventSender<JobDataCleanupEvent>>,
+    job_state_cleanup_sender: Result<EventSender<JobStateCleanupEvent>>,
+    job_id: String,
+) {
+    send_job_data_cleanup_event(
+        state.clone(),
+        job_data_cleanup_sender,
+        job_id.clone(),
+        false,
+    )
+    .await;
+    if state.config.finished_job_state_clean_up_interval_seconds > 0 {
+        send_job_state_cleanup_event(state, job_state_cleanup_sender, job_id, true).await;
+    }
+}
+
+async fn send_job_data_cleanup_event<
+    T: 'static + AsLogicalPlan,
+    U: 'static + AsExecutionPlan,
+>(
+    state: Arc<SchedulerState<T, U>>,
+    sender: Result<EventSender<JobDataCleanupEvent>>,
+    job_id: String,
+    delayed: bool,
+) {
+    if let Ok(sender) = sender {
+        let event = if delayed {
+            let deadline = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs()
+                + state.config.finished_job_data_clean_up_interval_seconds;
+            JobDataCleanupEvent::Delayed { job_id, deadline }
+        } else {
+            JobDataCleanupEvent::Immediate { job_id }
+        };
+        if let Err(e) = sender.post_event(event.clone()).await {
+            warn!("Fail to send event {:?} due to {:?}", event, e);
+        }
+    } else {
+        warn!("Fail to get event sender for JobDataCleanup");
+    }
+}
+
+async fn send_job_state_cleanup_event<
+    T: 'static + AsLogicalPlan,
+    U: 'static + AsExecutionPlan,
+>(
+    state: Arc<SchedulerState<T, U>>,
+    sender: Result<EventSender<JobStateCleanupEvent>>,
+    job_id: String,
+    delayed: bool,
+) {
+    if let Ok(sender) = sender {
+        let event = if delayed {
+            let deadline = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs()
+                + state.config.finished_job_state_clean_up_interval_seconds;
+            JobStateCleanupEvent::Delayed { job_id, deadline }
+        } else {
+            JobStateCleanupEvent::Immediate { job_id }
+        };
+        if let Err(e) = sender.post_event(event.clone()).await {
+            warn!("Fail to send event {:?} due to {:?}", event, e);
+        }
+    } else {
+        warn!("Fail to get event sender for JobStateCleanup");
+    }
+}
+
+async fn send_revive_offers_event(sender: Result<EventSender<()>>) {
+    if let Ok(sender) = sender {
+        if let Err(e) = sender.post_event(()).await {
+            error!("Fail to send revive offers event due to {:?}", e);
+        }
+    } else {
+        error!("Fail to get event sender for OfferReviver");
+    }
+}
+
+async fn send_task_status_updater_event<
+    T: 'static + AsLogicalPlan,
+    U: 'static + AsExecutionPlan,
+>(
+    state: Arc<SchedulerState<T, U>>,
+    task_status_event_sender: Result<EventSender<TaskStatusUpdateEvent>>,
+    executor_id: String,
+    tasks_status: Vec<TaskStatus>,
+    stage_event_sender: EventSender<QueryStageSchedulerEvent>,
+) {
+    debug!(
+        "processing task status updates from {executor_id}: {:?}",
+        tasks_status
+    );
+
+    let num_status = tasks_status.len();
+    if state.config.is_push_staged_scheduling() {
+        if let Err(e) = state
+            .executor_manager
+            .unbind_tasks(vec![(executor_id.clone(), num_status as u32)])
+            .await
+        {
+            error!(
+                "Fail to unbind {} slots for executor{}: {}",
+                num_status, executor_id, e
+            );
+        }
+    }
+
+    if let Ok(sender) = task_status_event_sender {
+        if let Err(e) = sender
+            .post_event(TaskStatusUpdateEvent {
+                executor_id,
+                tasks_status,
+                stage_event_sender,
+            })
+            .await
+        {
+            error!("Fail to send task status update event due to {:?}", e);
+        }
+    } else {
+        error!("Fail to get event sender for TaskStatusUpdater");
     }
 }
