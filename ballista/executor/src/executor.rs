@@ -21,10 +21,12 @@ use crate::execution_engine::DefaultExecutionEngine;
 use crate::execution_engine::ExecutionEngine;
 use crate::execution_engine::QueryStageExecutor;
 use crate::metrics::ExecutorMetricsCollector;
+use ballista_core::cache_layer::CacheLayer;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::protobuf;
 use ballista_core::serde::protobuf::ExecutorRegistration;
 use ballista_core::serde::scheduler::PartitionId;
+use ballista_core::utils::CachedBasedObjectStoreRegistry;
 use dashmap::DashMap;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -71,7 +73,12 @@ pub struct Executor {
     pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
 
     /// Runtime environment for Executor
-    pub runtime: Arc<RuntimeEnv>,
+    runtime: Arc<RuntimeEnv>,
+
+    /// Runtime environment for Executor with data cache.
+    /// The difference with [`runtime`] is that it leverages a different [`object_store_registry`].
+    /// And others things are shared with [`runtime`].
+    runtime_with_data_cache: Option<Arc<RuntimeEnv>>,
 
     /// Collector for runtime execution metrics
     pub metrics_collector: Arc<dyn ExecutorMetricsCollector>,
@@ -93,10 +100,24 @@ impl Executor {
         metadata: ExecutorRegistration,
         work_dir: &str,
         runtime: Arc<RuntimeEnv>,
+        cache_layer: Option<CacheLayer>,
         metrics_collector: Arc<dyn ExecutorMetricsCollector>,
         concurrent_tasks: usize,
         execution_engine: Option<Arc<dyn ExecutionEngine>>,
     ) -> Self {
+        let runtime_with_data_cache = if let Some(cache_layer) = cache_layer {
+            let registry = Arc::new(CachedBasedObjectStoreRegistry::new(
+                runtime.object_store_registry.clone(),
+                cache_layer,
+            ));
+            Some(Arc::new(RuntimeEnv {
+                memory_pool: runtime.memory_pool.clone(),
+                disk_manager: runtime.disk_manager.clone(),
+                object_store_registry: registry,
+            }))
+        } else {
+            None
+        };
         Self {
             metadata,
             work_dir: work_dir.to_owned(),
@@ -104,6 +125,7 @@ impl Executor {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             runtime,
+            runtime_with_data_cache,
             metrics_collector,
             concurrent_tasks,
             abort_handles: Default::default(),
@@ -114,6 +136,18 @@ impl Executor {
 }
 
 impl Executor {
+    pub fn get_runtime(&self, data_cache: bool) -> Arc<RuntimeEnv> {
+        if data_cache {
+            if let Some(runtime) = self.runtime_with_data_cache.clone() {
+                runtime
+            } else {
+                self.runtime.clone()
+            }
+        } else {
+            self.runtime.clone()
+        }
+    }
+
     /// Execute one partition of a query stage and persist the result to disk in IPC format. On
     /// success, return a RecordBatch containing metadata about the results, including path
     /// and statistics.
@@ -353,6 +387,7 @@ mod test {
             executor_registration,
             &work_dir,
             ctx.runtime_env(),
+            None,
             Arc::new(LoggingMetricsCollector {}),
             2,
             None,

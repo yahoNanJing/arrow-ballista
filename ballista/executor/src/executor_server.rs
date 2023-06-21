@@ -32,6 +32,7 @@ use log::{debug, error, info, warn};
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
+use ballista_core::config::BALLISTA_DATA_CACHE_ENABLED;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::protobuf::{
     executor_grpc_server::{ExecutorGrpc, ExecutorGrpcServer},
@@ -391,9 +392,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         info!("Start to run task {}", task_identity);
         let task = curator_task.task;
         let task_props = task.props;
+        let data_cache = task_props
+            .get(BALLISTA_DATA_CACHE_ENABLED)
+            .map(|data_cache| data_cache.parse().unwrap_or(false))
+            .unwrap_or(false);
         let mut config = ConfigOptions::new();
         for (k, v) in task_props {
-            config.set(&k, &v)?;
+            if let Err(e) = config.set(&k, &v) {
+                debug!("Fail to set session config for ({},{}): {:?}", k, v, e);
+            }
         }
         let session_config = SessionConfig::from(config);
 
@@ -408,7 +415,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         }
 
         let session_id = task.session_id;
-        let runtime = self.executor.runtime.clone();
+
+        if data_cache {
+            info!("Data cache will be enabled for {}", task_identity);
+        }
+        let runtime = self.executor.get_runtime(data_cache);
+
         let task_context = Arc::new(TaskContext::new(
             Some(task_identity.clone()),
             session_id,

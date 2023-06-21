@@ -37,6 +37,8 @@ pub const BALLISTA_PARQUET_PRUNING: &str = "ballista.parquet.pruning";
 pub const BALLISTA_WITH_INFORMATION_SCHEMA: &str = "ballista.with_information_schema";
 /// give a plugin files dir, and then the dynamic library files in this dir will be load when scheduler state init.
 pub const BALLISTA_PLUGIN_DIR: &str = "ballista.plugin_dir";
+/// Indicate whether to enable to data cache for a task
+pub const BALLISTA_DATA_CACHE_ENABLED: &str = "ballista.data_cache.enabled";
 
 pub type ParseResult<T> = result::Result<T, String>;
 

@@ -88,6 +88,7 @@ pub fn with_object_store_registry(config: RuntimeConfig) -> RuntimeConfig {
     config.with_object_store_registry(registry)
 }
 
+/// Get a RuntimeConfig with CachedBasedObjectStoreRegistry
 pub fn with_cache_layer(config: RuntimeConfig, cache_layer: CacheLayer) -> RuntimeConfig {
     let registry = Arc::new(BallistaObjectStoreRegistry::default());
     let registry = Arc::new(CachedBasedObjectStoreRegistry::new(registry, cache_layer));

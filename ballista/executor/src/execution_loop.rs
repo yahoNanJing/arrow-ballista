@@ -188,7 +188,7 @@ async fn run_received_task<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
     for agg_func in executor.aggregate_functions.clone() {
         task_aggregate_functions.insert(agg_func.0, agg_func.1);
     }
-    let runtime = executor.runtime.clone();
+    let runtime = executor.get_runtime(false);
     let session_id = task.session_id.clone();
     let task_context = Arc::new(TaskContext::new(
         Some(task_identity.clone()),

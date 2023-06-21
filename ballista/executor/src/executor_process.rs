@@ -60,7 +60,7 @@ use ballista_core::serde::protobuf::{
 use ballista_core::serde::BallistaCodec;
 use ballista_core::utils::{
     create_grpc_client_connection, create_grpc_server, get_time_before_interval,
-    with_cache_layer, with_object_store_registry,
+    with_object_store_registry,
 };
 use ballista_core::BALLISTA_VERSION;
 
@@ -231,6 +231,14 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
         }),
     };
 
+    let config = RuntimeConfig::new().with_temp_file_path(work_dir.clone());
+    let runtime = {
+        let config = with_object_store_registry(config.clone());
+        Arc::new(RuntimeEnv::new(config).map_err(|_| {
+            BallistaError::Internal("Failed to init Executor RuntimeEnv".to_owned())
+        })?)
+    };
+
     let cache_dir = opt.cache_dir.clone();
     let cache_capacity = opt.cache_capacity;
     let cache_layer: Option<CacheLayer> =
@@ -246,22 +254,13 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
                 }
             });
 
-    let config = RuntimeConfig::new().with_temp_file_path(work_dir.clone());
-    let config = if let Some(cache_layer) = cache_layer {
-        with_cache_layer(config, cache_layer)
-    } else {
-        with_object_store_registry(config)
-    };
-    let runtime = Arc::new(RuntimeEnv::new(config).map_err(|_| {
-        BallistaError::Internal("Failed to init Executor RuntimeEnv".to_owned())
-    })?);
-
     let metrics_collector = Arc::new(LoggingMetricsCollector::default());
 
     let executor = Arc::new(Executor::new(
         executor_meta,
         &work_dir,
         runtime,
+        cache_layer,
         metrics_collector,
         concurrent_tasks,
         opt.execution_engine.clone(),
