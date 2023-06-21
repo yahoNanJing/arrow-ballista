@@ -214,65 +214,68 @@ async fn run_received_task<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
         plan,
         &executor.work_dir,
     )?;
-    dedicated_executor.spawn(async move {
-        use std::panic::AssertUnwindSafe;
-        let part = PartitionId {
-            job_id: job_id.clone(),
-            stage_id: stage_id as usize,
-            partition_id: partition_id as usize,
-        };
+    dedicated_executor.spawn(
+        async move {
+            use std::panic::AssertUnwindSafe;
+            let part = PartitionId {
+                job_id: job_id.clone(),
+                stage_id: stage_id as usize,
+                partition_id: partition_id as usize,
+            };
 
-        let execution_result = match AssertUnwindSafe(executor.execute_query_stage(
-            task_id as usize,
-            part.clone(),
-            query_stage_exec.clone(),
-            task_context,
-        ))
-        .catch_unwind()
-        .await
-        {
-            Ok(Ok(r)) => Ok(r),
-            Ok(Err(r)) => Err(r),
-            Err(r) => {
-                error!("Error executing task: {:?}", any_to_string(&r));
-                Err(BallistaError::Internal(format!("{:#?}", any_to_string(&r))))
-            }
-        };
+            let execution_result = match AssertUnwindSafe(executor.execute_query_stage(
+                task_id as usize,
+                part.clone(),
+                query_stage_exec.clone(),
+                task_context,
+            ))
+            .catch_unwind()
+            .await
+            {
+                Ok(Ok(r)) => Ok(r),
+                Ok(Err(r)) => Err(r),
+                Err(r) => {
+                    error!("Error executing task: {:?}", any_to_string(&r));
+                    Err(BallistaError::Internal(format!("{:#?}", any_to_string(&r))))
+                }
+            };
 
-        info!("Done with task {}", task_identity);
-        debug!("Statistics: {:?}", execution_result);
+            info!("Done with task {}", task_identity);
+            debug!("Statistics: {:?}", execution_result);
 
-        let plan_metrics = query_stage_exec.collect_plan_metrics();
-        let operator_metrics = plan_metrics
-            .into_iter()
-            .map(|m| m.try_into())
-            .collect::<Result<Vec<_>, BallistaError>>()
-            .ok();
+            let plan_metrics = query_stage_exec.collect_plan_metrics();
+            let operator_metrics = plan_metrics
+                .into_iter()
+                .map(|m| m.try_into())
+                .collect::<Result<Vec<_>, BallistaError>>()
+                .ok();
 
-        let end_exec_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+            let end_exec_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
 
-        let task_execution_times = TaskExecutionTimes {
-            launch_time: task_launch_time,
-            start_exec_time,
-            end_exec_time,
-        };
+            let task_execution_times = TaskExecutionTimes {
+                launch_time: task_launch_time,
+                start_exec_time,
+                end_exec_time,
+            };
 
-        let _ = task_status_sender.send(as_task_status(
-            execution_result,
-            executor.metadata.id.clone(),
-            task_id as usize,
-            stage_attempt_num as usize,
-            part,
-            operator_metrics,
-            task_execution_times,
-        ));
+            let _ = task_status_sender.send(as_task_status(
+                execution_result,
+                executor.metadata.id.clone(),
+                task_id as usize,
+                stage_attempt_num as usize,
+                part,
+                operator_metrics,
+                task_execution_times,
+            ));
 
-        // Release the permit after the work is done
-        drop(permit);
-    });
+            // Release the permit after the work is done
+            drop(permit);
+        },
+        true,
+    );
 
     Ok(())
 }

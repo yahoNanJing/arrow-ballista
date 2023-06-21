@@ -745,17 +745,20 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
                     info!("Received task {:?}", &task_identity);
 
                     let server = executor_server.clone();
-                    dedicated_executor.spawn(async move {
-                        server
-                            .run_task(task_identity.clone(), curator_task)
-                            .await
-                            .unwrap_or_else(|e| {
-                                error!(
-                                    "Fail to run the task {:?} due to {:?}",
-                                    task_identity, e
-                                );
-                            });
-                    });
+                    dedicated_executor.spawn(
+                        async move {
+                            server
+                                .run_task(task_identity.clone(), curator_task)
+                                .await
+                                .unwrap_or_else(|e| {
+                                    error!(
+                                        "Fail to run the task {:?} due to {:?}",
+                                        task_identity, e
+                                    );
+                                });
+                        },
+                        true,
+                    );
                 } else {
                     info!("Channel is closed and will exit the task receive loop");
                     drop(task_runner_complete);

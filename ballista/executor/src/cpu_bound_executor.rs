@@ -135,7 +135,8 @@ impl DedicatedExecutor {
     ///
     /// Currently all tasks are added to the tokio executor
     /// immediately and compete for the threadpool's resources.
-    pub fn spawn<T>(&self, task: T) -> Receiver<T::Output>
+    /// If set ignore_result will ignore rec drop errors.
+    pub fn spawn<T>(&self, task: T, ignore_result: bool) -> Receiver<T::Output>
     where
         T: Future + Send + 'static,
         T::Output: Send + 'static,
@@ -145,7 +146,7 @@ impl DedicatedExecutor {
         // create a execution plan to spawn
         let job = Box::pin(async move {
             let task_output = task.await;
-            if tx.send(task_output).is_err() {
+            if tx.send(task_output).is_err() && !ignore_result {
                 warn!("Spawned task output ignored: receiver dropped");
             }
         });
@@ -229,7 +230,7 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
 
         let exec = DedicatedExecutor::new("Test DedicatedExecutor", 1);
-        let dedicated_task = exec.spawn(do_work(42, Arc::clone(&barrier)));
+        let dedicated_task = exec.spawn(do_work(42, Arc::clone(&barrier)), false);
 
         // Note the dedicated task will never complete if it runs on
         // the main tokio thread
@@ -245,7 +246,7 @@ mod tests {
     async fn basic_clone() {
         let barrier = Arc::new(Barrier::new(2));
         let exec = DedicatedExecutor::new("Test DedicatedExecutor", 1);
-        let dedicated_task = exec.clone().spawn(do_work(42, Arc::clone(&barrier)));
+        let dedicated_task = exec.clone().spawn(do_work(42, Arc::clone(&barrier)), false);
         barrier.wait();
         assert_eq!(dedicated_task.await.unwrap(), 42);
     }
@@ -256,8 +257,8 @@ mod tests {
 
         // make an executor with two threads
         let exec = DedicatedExecutor::new("Test DedicatedExecutor", 2);
-        let dedicated_task1 = exec.spawn(do_work(11, Arc::clone(&barrier)));
-        let dedicated_task2 = exec.spawn(do_work(42, Arc::clone(&barrier)));
+        let dedicated_task1 = exec.spawn(do_work(11, Arc::clone(&barrier)), false);
+        let dedicated_task2 = exec.spawn(do_work(42, Arc::clone(&barrier)), false);
 
         // block main thread until completion of other two tasks
         barrier.wait();
@@ -273,7 +274,8 @@ mod tests {
     async fn worker_priority() {
         let exec = DedicatedExecutor::new("Test DedicatedExecutor", 2);
 
-        let dedicated_task = exec.spawn(async move { get_current_thread_priority() });
+        let dedicated_task =
+            exec.spawn(async move { get_current_thread_priority() }, false);
 
         assert_eq!(dedicated_task.await.unwrap(), WORKER_PRIORITY);
     }
@@ -284,17 +286,20 @@ mod tests {
 
         // spawn a task that spawns to other tasks and ensure they run on the dedicated
         // executor
-        let dedicated_task = exec.spawn(async move {
-            // spawn separate tasks
-            let t1 = tokio::task::spawn(async {
-                assert_eq!(
-                    std::thread::current().name(),
-                    Some("Test DedicatedExecutor")
-                );
-                25usize
-            });
-            t1.await.unwrap()
-        });
+        let dedicated_task = exec.spawn(
+            async move {
+                // spawn separate tasks
+                let t1 = tokio::task::spawn(async {
+                    assert_eq!(
+                        std::thread::current().name(),
+                        Some("Test DedicatedExecutor")
+                    );
+                    25usize
+                });
+                t1.await.unwrap()
+            },
+            false,
+        );
 
         assert_eq!(dedicated_task.await.unwrap(), 25);
     }
@@ -302,9 +307,12 @@ mod tests {
     #[tokio::test]
     async fn panic_on_executor() {
         let exec = DedicatedExecutor::new("Test DedicatedExecutor", 1);
-        let dedicated_task = exec.spawn(async move {
-            panic!("At the disco, on the dedicated task scheduler");
-        });
+        let dedicated_task = exec.spawn(
+            async move {
+                panic!("At the disco, on the dedicated task scheduler");
+            },
+            false,
+        );
 
         // should not be able to get the result
         dedicated_task.await.unwrap_err();
@@ -317,7 +325,7 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
 
         let exec = DedicatedExecutor::new("Test DedicatedExecutor", 1);
-        let dedicated_task = exec.spawn(do_work(42, Arc::clone(&barrier)));
+        let dedicated_task = exec.spawn(do_work(42, Arc::clone(&barrier)), false);
 
         exec.shutdown();
         // block main thread until completion of the outstanding task
@@ -333,7 +341,7 @@ mod tests {
 
         // Simulate trying to submit tasks once executor has shutdown
         exec.shutdown();
-        let dedicated_task = exec.spawn(async { 11 });
+        let dedicated_task = exec.spawn(async { 11 }, false);
 
         // task should complete, but return an error
         dedicated_task.await.unwrap_err();
@@ -347,7 +355,7 @@ mod tests {
         exec.clone().join();
 
         // Simulate trying to submit tasks once executor has shutdown
-        let dedicated_task = exec.spawn(async { 11 });
+        let dedicated_task = exec.spawn(async { 11 }, false);
 
         // task should complete, but return an error
         dedicated_task.await.unwrap_err();
