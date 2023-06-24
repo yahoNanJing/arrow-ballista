@@ -99,6 +99,7 @@ pub struct ExecutorProcessConfig {
     pub source_data_cache_policy: Option<SourceDataCachePolicy>,
     pub cache_dir: Option<String>,
     pub cache_capacity: u64,
+    pub cache_io_concurrency: u32,
     /// Optional execution engine to use to execute physical plans, will default to
     /// DataFusion if none is provided.
     pub execution_engine: Option<Arc<dyn ExecutionEngine>>,
@@ -241,6 +242,7 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
 
     let cache_dir = opt.cache_dir.clone();
     let cache_capacity = opt.cache_capacity;
+    let cache_io_concurrency = opt.cache_io_concurrency;
     let cache_layer: Option<CacheLayer> =
         opt.source_data_cache_policy
             .map(|source_data_cache_policy| match source_data_cache_policy {
@@ -248,6 +250,7 @@ pub async fn start_executor_process(opt: ExecutorProcessConfig) -> Result<()> {
                     let cache_dir = cache_dir.unwrap();
                     let cache_layer = FileCacheLayer::new(
                         cache_capacity as usize,
+                        cache_io_concurrency,
                         LocalDiskMedium::new(cache_dir),
                     );
                     CacheLayer::LocalDiskFile(Arc::new(cache_layer))

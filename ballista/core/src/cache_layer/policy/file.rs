@@ -33,6 +33,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use std::ops::Range;
 use std::sync::Arc;
+use tokio::runtime::Runtime;
 
 type DefaultFileLoadingCache<M> =
     DefaultLoadingCache<Path, ObjectMeta, FileCacheLoader<M>>;
@@ -45,6 +46,7 @@ where
 {
     cache_store: Arc<dyn ObjectStore>,
     loading_cache: DefaultFileLoadingCache<M>,
+    io_runtime: Runtime,
     metrics: Arc<FileCacheMetrics>,
 }
 
@@ -52,7 +54,7 @@ impl<M> FileCacheLayer<M>
 where
     M: CacheMedium,
 {
-    pub fn new(capacity: usize, cache_medium: M) -> Self {
+    pub fn new(capacity: usize, cache_io_concurrency: u32, cache_medium: M) -> Self {
         let cache_store = cache_medium.get_object_store();
 
         let cache_counter = FileCacheCounter::new(capacity);
@@ -64,10 +66,17 @@ where
             cache_with_removal_listener,
             file_cache_loader,
         );
+        let io_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("loading_cache")
+            .worker_threads(cache_io_concurrency as usize)
+            .build()
+            .expect("Creating tokio runtime");
 
         Self {
             cache_store,
             loading_cache,
+            io_runtime,
             metrics,
         }
     }
@@ -78,6 +87,10 @@ where
 
     pub fn cache(&self) -> &DefaultFileLoadingCache<M> {
         &self.loading_cache
+    }
+
+    pub fn io_runtime(&self) -> &Runtime {
+        &self.io_runtime
     }
 
     pub fn metrics(&self) -> &FileCacheMetrics {
@@ -137,20 +150,20 @@ where
     let cache_store = cache_medium.get_object_store();
     let cache_location =
         cache_medium.get_mapping_location(&source_location, source_store);
-    info!(
-        "Going to cache object from {} to {}",
-        source_location, cache_location
-    );
 
     // Check whether the cache location exist or not. If exists, delete it first.
     if cache_store.head(&cache_location).await.is_ok() {
         if let Err(e) = cache_store.delete(&cache_location).await {
             error!(
-                    "Fail to delete file {cache_location} on the cache ObjectStore due to {e}"
-                );
+                "Fail to delete file {cache_location} on the cache ObjectStore due to {e}"
+            );
         }
     }
 
+    info!(
+        "Going to cache object from {} to {}",
+        source_location, cache_location
+    );
     let range = Range {
         start: 0,
         end: source_meta.size,
@@ -163,13 +176,16 @@ where
                 "Fail to get file data from {source_location} due to {e}"
             ))
         })?;
-    info!("{} bytes will be cached", data.len());
+    info!(
+        "{} bytes will be cached for {}",
+        data.len(),
+        source_location
+    );
     cache_store.put(&cache_location, data).await.map_err(|e| {
         BallistaError::General(format!(
             "Fail to write out data to {cache_location} due to {e}"
         ))
     })?;
-
     info!(
         "Object {} has already been cached to {}",
         source_location, cache_location

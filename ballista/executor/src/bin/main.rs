@@ -82,6 +82,7 @@ async fn main() -> Result<()> {
         source_data_cache_policy: opt.source_data_cache_policy,
         cache_dir: opt.cache_dir,
         cache_capacity: opt.cache_capacity,
+        cache_io_concurrency: opt.cache_io_concurrency,
         execution_engine: None,
         zk_address: opt.zk_address,
         zk_session_timeout: opt.zk_session_timeout,

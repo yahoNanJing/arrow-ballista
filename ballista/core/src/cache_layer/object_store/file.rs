@@ -113,15 +113,14 @@ where
             let cache_location = &cache_object_mata.location;
             self.cache_layer.cache_store().get(cache_location).await
         } else {
+            let io_runtime = self.cache_layer.io_runtime();
             let cache_layer = self.cache_layer.clone();
             let key = location.clone();
             let extra = self.inner.clone();
-            tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(async move {
-                    info!("Going to cache data for {}", key);
-                    cache_layer.cache().get(key.clone(), extra).await;
-                    info!("Data for {} has been cached", key);
-                });
+            io_runtime.spawn(async move {
+                info!("Going to cache data for {}", key);
+                cache_layer.cache().get(key.clone(), extra).await;
+                info!("Data for {} has been cached", key);
             });
             self.inner.get(location).await
         }
@@ -145,15 +144,14 @@ where
                 .get_range(cache_location, range)
                 .await
         } else {
+            let io_runtime = self.cache_layer.io_runtime();
             let cache_layer = self.cache_layer.clone();
             let key = location.clone();
             let extra = self.inner.clone();
-            tokio::task::spawn_blocking(move || {
-                tokio::runtime::Handle::current().block_on(async move {
-                    info!("Going to cache data for {}", key);
-                    cache_layer.cache().get(key.clone(), extra).await;
-                    info!("Data for {} has been cached", key);
-                });
+            io_runtime.spawn(async move {
+                info!("Going to cache data for {}", key);
+                cache_layer.cache().get(key.clone(), extra).await;
+                info!("Data for {} has been cached", key);
             });
             self.inner.get_range(location, range).await
         }

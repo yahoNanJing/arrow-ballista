@@ -154,6 +154,12 @@ type = "u64"
 doc = "The maximum capacity can be used for cache. Default: 1GB"
 default = "1073741824"
 
+[[param]]
+name = "cache_io_concurrency"
+type = "u32"
+doc = "The number of worker threads for the runtime of caching. Default: 2"
+default = "2"
+
 # parameters for multi scheduler with zookeeper
 [[param]]
 name = "zk_address"

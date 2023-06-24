@@ -84,7 +84,7 @@ mod tests {
 
         // Check the testing data on the cache object store
         let cache_medium = LocalMemoryMedium::new();
-        let cache_layer = FileCacheLayer::new(1000, cache_medium);
+        let cache_layer = FileCacheLayer::new(1000, 1, cache_medium);
         let cache_meta = cache_layer
             .cache()
             .get(
@@ -120,6 +120,9 @@ mod tests {
         }
 
         test_file.close()?;
+
+        std::mem::forget(cache_object_store);
+
         Ok(())
     }
 }
